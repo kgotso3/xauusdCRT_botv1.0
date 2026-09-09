@@ -19,6 +19,20 @@ def _dataset(n: int = 1800) -> pd.DataFrame:
     wick_size = candle_range - np.abs(close - open_)
     atr14 = rng.uniform(1, 3, n)
 
+    # Canonical research-layer range/liquidity features that are already present
+    # in production occurrence CSVs before the V1.2/V3 feature builders run.
+    range_position_4h = rng.uniform(0, 1, n)
+    range_position_8h = rng.uniform(0, 1, n)
+    range_position_24h = rng.uniform(0, 1, n)
+    distance_recent_high_4h_atr = rng.uniform(0, 4, n)
+    distance_recent_low_4h_atr = rng.uniform(0, 4, n)
+    distance_recent_high_8h_atr = rng.uniform(0, 5, n)
+    distance_recent_low_8h_atr = rng.uniform(0, 5, n)
+    distance_recent_high_24h_atr = rng.uniform(0, 8, n)
+    distance_recent_low_24h_atr = rng.uniform(0, 8, n)
+    distance_prev_day_high_atr = rng.uniform(-5, 5, n)
+    distance_prev_day_low_atr = rng.uniform(-5, 5, n)
+
     base = pd.DataFrame({
         "signal_time_utc": ts,
         "decision_time_utc": ts,
@@ -53,6 +67,17 @@ def _dataset(n: int = 1800) -> pd.DataFrame:
         "prev_day_high": close + rng.uniform(3, 12, n),
         "prev_day_low": close - rng.uniform(3, 12, n),
         "ny_hour": ts.tz_convert("America/New_York").hour,
+        "range_position_4h": range_position_4h,
+        "range_position_8h": range_position_8h,
+        "range_position_24h": range_position_24h,
+        "distance_recent_high_4h_atr": distance_recent_high_4h_atr,
+        "distance_recent_low_4h_atr": distance_recent_low_4h_atr,
+        "distance_recent_high_8h_atr": distance_recent_high_8h_atr,
+        "distance_recent_low_8h_atr": distance_recent_low_8h_atr,
+        "distance_recent_high_24h_atr": distance_recent_high_24h_atr,
+        "distance_recent_low_24h_atr": distance_recent_low_24h_atr,
+        "distance_prev_day_high_atr": distance_prev_day_high_atr,
+        "distance_prev_day_low_atr": distance_prev_day_low_atr,
         "hit_1_0r": (rng.random(n) > .55).astype(int),
         "hit_1_5r": (rng.random(n) > .65).astype(int),
     })
