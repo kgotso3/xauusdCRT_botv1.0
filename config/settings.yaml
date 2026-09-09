@@ -1,0 +1,31 @@
+app:
+  name: XAUUSD CRT Trader
+  version: 1.0.0
+  mode: DEMO
+
+market:
+  symbol: XAUUSD
+  primary_timeframe: H1
+  confirmation_timeframes:
+    - M15
+    - M5
+  timezone: America/New_York
+  session_start: "08:00"
+  session_end: "17:00"
+
+risk:
+  risk_per_trade: 0.0025
+  max_daily_loss: 0.02
+  max_open_positions: 1
+  reward_risk: 2.0
+
+strategy:
+  minimum_score: 70
+  require_crt: true
+  require_bias_alignment: true
+  require_confirmation: true
+
+execution:
+  enabled: true
+  dry_run: false
+  deviation_points: 50
