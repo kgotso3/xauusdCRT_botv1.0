@@ -9,7 +9,7 @@ def _safe_rate(series: pd.Series) -> float:
 
 
 def _segment(df: pd.DataFrame, cols: list[str], min_samples: int) -> pd.DataFrame:
-    grouped = df.groupby(cols, dropna=False)
+    grouped = df.groupby(cols, dropna=False, observed=True)
     rows: list[dict] = []
     for keys, group in grouped:
         if len(group) < min_samples:
@@ -61,8 +61,10 @@ def add_research_buckets(dataset: pd.DataFrame) -> pd.DataFrame:
 
 def build_segmentation_tables(dataset: pd.DataFrame, min_samples: int = 20) -> dict[str, pd.DataFrame]:
     df = add_research_buckets(dataset)
+    ny = df[df["in_ny_08_13"]].copy()
+
     tables = {
-        "ny_hour": _segment(df[df["in_ny_08_13"]], ["ny_hour"], min_samples),
+        "ny_hour": _segment(ny, ["ny_hour"], min_samples),
         "direction": _segment(df, ["direction"], min_samples),
         "weekday": _segment(df, ["day_of_week"], min_samples),
         "alignment": _segment(df, ["alignment_count"], min_samples),
@@ -70,7 +72,18 @@ def build_segmentation_tables(dataset: pd.DataFrame, min_samples: int = 20) -> d
         "rsi_band": _segment(df, ["rsi_band"], min_samples),
         "volatility": _segment(df, ["volatility_regime"], min_samples),
         "sweep_atr": _segment(df, ["sweep_atr_band"], min_samples),
-        "ny_hour_direction": _segment(df[df["in_ny_08_13"]], ["ny_hour", "direction"], min_samples),
-        "ny_alignment": _segment(df[df["in_ny_08_13"]], ["alignment_count"], min_samples),
+        "ny_hour_direction": _segment(ny, ["ny_hour", "direction"], min_samples),
+        "ny_alignment": _segment(ny, ["alignment_count"], min_samples),
+        "ny_hour_direction_alignment": _segment(
+            ny, ["ny_hour", "direction", "alignment_count"], min_samples
+        ),
+        "ny_direction_rsi": _segment(ny, ["direction", "rsi_band"], min_samples),
+        "ny_direction_sweep_atr": _segment(
+            ny, ["direction", "sweep_atr_band"], min_samples
+        ),
+        "ny_direction_volatility": _segment(
+            ny, ["direction", "volatility_regime"], min_samples
+        ),
+        "ny_hour_alignment": _segment(ny, ["ny_hour", "alignment_count"], min_samples),
     }
     return tables
