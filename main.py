@@ -12,6 +12,25 @@ from risk.position_size import calculate_mt5_volume
 from strategy.signal_engine import build_signal
 
 
+def _print_symbol_diagnostics(symbol: str, max_spread_points: float) -> None:
+    info = mt5.symbol_info(symbol)
+    if info is None:
+        raise RuntimeError(f"Unable to read symbol diagnostics for {symbol}.")
+
+    print(
+        "CONTRACT: "
+        f"digits={info.digits} point={info.point} "
+        f"tick_size={info.trade_tick_size} tick_value={info.trade_tick_value} "
+        f"volume_min={info.volume_min} volume_max={info.volume_max} volume_step={info.volume_step}"
+    )
+    print(
+        "EXECUTION: "
+        f"trade_mode={info.trade_mode} filling_mode={info.filling_mode} "
+        f"stops_level={info.trade_stops_level} freeze_level={info.trade_freeze_level} "
+        f"max_spread_points={max_spread_points}"
+    )
+
+
 def run(mode: str) -> None:
     settings = connect()
     try:
@@ -25,6 +44,8 @@ def run(mode: str) -> None:
         print("Safety: MT5 DEMO account verified")
         if symbol != requested_symbol:
             print(f"Symbol resolved: {requested_symbol} -> {symbol}")
+
+        _print_symbol_diagnostics(symbol, settings.max_spread_points)
 
         tick = latest_tick(symbol)
         print(f"MT5 latest tick UTC: {tick['time'].isoformat()}")
@@ -54,6 +75,14 @@ def run(mode: str) -> None:
             return
         if not signal["approved"]:
             print("NO TRADE: setup/session requirements not met.")
+            return
+
+        if tick["spread_points"] > settings.max_spread_points:
+            print(
+                "NO TRADE: spread safety limit exceeded: "
+                f"current={tick['spread_points']:.1f} points, "
+                f"maximum={settings.max_spread_points:.1f} points."
+            )
             return
 
         prior_status = execution_status(signal_id)
