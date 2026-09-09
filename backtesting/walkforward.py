@@ -70,9 +70,8 @@ def build_walkforward_report(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Evaluate V2 candidate filters chronologically for 1R and 1.5R only.
 
-    The candidate rules are deterministic filters. No model selection is made
-    on the test split; test metrics are reported only after the same candidate
-    definition has been evaluated on train and validation data.
+    Candidate rules are deterministic filters. The test split is reported as
+    an untouched chronological holdout and must not be used to tune rules.
     """
     cfg = config or SplitConfig()
     df = add_research_buckets(dataset)
@@ -129,8 +128,9 @@ def build_walkforward_report(
         ).reset_index(drop=True)
 
     period_rows: list[dict] = []
-    df["month"] = df["signal_time_utc"].dt.to_period("M").astype(str)
-    df["quarter"] = df["signal_time_utc"].dt.to_period("Q").astype(str)
+    naive_utc = df["signal_time_utc"].dt.tz_convert("UTC").dt.tz_localize(None)
+    df["month"] = naive_utc.dt.to_period("M").astype(str)
+    df["quarter"] = naive_utc.dt.to_period("Q").astype(str)
     for period_type in ["month", "quarter"]:
         for period, part in df.groupby(period_type, observed=True):
             hit_1r = float(part["hit_1_0r"].mean())
