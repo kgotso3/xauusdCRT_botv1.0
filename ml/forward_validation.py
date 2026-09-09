@@ -118,6 +118,25 @@ def _normalize_journal_keys(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _concat_journal_frames(old: pd.DataFrame, new: pd.DataFrame) -> pd.DataFrame:
+    """Concatenate journal frames without pandas all-NA dtype inference warnings."""
+    if old.empty:
+        return new.copy()
+    if new.empty:
+        return old.copy()
+
+    columns = list(dict.fromkeys([*old.columns, *new.columns]))
+    old = old.reindex(columns=columns)
+    new = new.reindex(columns=columns)
+
+    # Object dtype is intentional for the intermediate merge. The journal keys
+    # are normalized immediately afterwards and numeric metrics are coerced by
+    # the reporting layer when consumed.
+    old = old.astype(object)
+    new = new.astype(object)
+    return pd.concat([old, new], ignore_index=True, sort=False)
+
+
 def upsert_prediction_journal(new_rows: pd.DataFrame, journal_path: str | Path) -> pd.DataFrame:
     path = Path(journal_path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -126,7 +145,7 @@ def upsert_prediction_journal(new_rows: pd.DataFrame, journal_path: str | Path) 
     normalized_new = _normalize_journal_keys(new_rows)
     if path.exists():
         old = _normalize_journal_keys(pd.read_csv(path))
-        combined = pd.concat([old, normalized_new], ignore_index=True, sort=False)
+        combined = _concat_journal_frames(old, normalized_new)
     else:
         combined = normalized_new.copy()
 
