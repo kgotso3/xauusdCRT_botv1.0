@@ -46,9 +46,30 @@ def test_occurrence_dataset_records_crt_sweep_without_strategy_approval():
     row = dataset.iloc[0]
     assert row["direction"] == "BUY"
     assert row["crt_direction"] == "BULLISH"
-    assert "hit_2_0r" in dataset.columns
+    assert "hit_1_0r" in dataset.columns
+    assert "hit_1_5r" in dataset.columns
     assert "mfe_r" in dataset.columns
     assert "alignment_count" in dataset.columns
+
+
+def test_research_can_optionally_keep_2r_for_legacy_analysis():
+    h1_times = pd.date_range("2026-01-01", periods=230, freq="h", tz="UTC")
+    h1 = _bars(h1_times)
+    prev_low = float(h1.loc[219, "low"])
+    prev_high = float(h1.loc[219, "high"])
+    h1.loc[220, "low"] = prev_low - 0.5
+    h1.loc[220, "high"] = prev_high - 0.1
+    h1.loc[220, "close"] = prev_low + 0.2
+    h1.loc[221, "open"] = prev_low + 0.4
+    m15 = _bars(pd.date_range("2025-12-20", periods=2000, freq="15min", tz="UTC"))
+    m5 = _bars(pd.date_range("2025-12-20", periods=6000, freq="5min", tz="UTC"))
+    dataset = build_crt_occurrence_dataset(
+        h1,
+        m15,
+        m5,
+        ResearchConfig(warmup_h1=220, max_holding_bars=5, target_rs=(1.0, 1.5, 2.0)),
+    )
+    assert "hit_2_0r" in dataset.columns
 
 
 def test_research_requires_history_after_warmup():
