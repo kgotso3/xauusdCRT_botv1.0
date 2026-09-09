@@ -9,6 +9,7 @@ from ml.v1 import MLConfig, chronological_split
 
 def _dataset(n=240):
     times = pd.date_range("2025-01-01", periods=n, freq="h", tz="UTC")
+    one_hour = pd.offsets.Hour(1)
     rows = []
     for i, ts in enumerate(times):
         direction = "BUY" if i % 2 == 0 else "SELL"
@@ -18,8 +19,8 @@ def _dataset(n=240):
         low = min(open_, close) - 1.5
         rows.append({
             "signal_time_utc": ts,
-            "decision_time_utc": ts + pd.Timedelta(hours=1),
-            "entry_time_utc": ts + pd.Timedelta(hours=1),
+            "decision_time_utc": ts + one_hour,
+            "entry_time_utc": ts + one_hour,
             "ny_hour": i % 24,
             "day_of_week": ts.day_name(),
             "in_ny_08_13": 8 <= (i % 24) < 13,
