@@ -34,6 +34,7 @@ def main() -> None:
     print("CRT FROZEN FORWARD VALIDATION")
     print(f"Cutoff: {cutoff.isoformat()}")
     print("Models: V1 + V1.2 | no retraining | no threshold tuning")
+    print("Fresh outcomes stay PENDING until target/stop resolves or the 24H horizon completes.")
     print(f"New scored rows this run: {len(scored)}")
     print(f"Journal rows total:       {len(journal)}")
     print(f"Journal: {args.journal}")
@@ -44,7 +45,7 @@ def main() -> None:
         return
 
     cols = [
-        "model_version", "target", "forward_predictions", "labelled_predictions",
+        "model_version", "target", "forward_predictions", "pending_predictions", "labelled_predictions",
         "positive_rate", "roc_auc", "brier", "threshold_frozen", "selected_trades",
         "selected_coverage", "selected_hit_rate", "selected_expectancy_r", "selected_net_r",
     ]
