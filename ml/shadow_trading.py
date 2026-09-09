@@ -19,17 +19,27 @@ class ShadowModelSpec:
     target_r: float
 
 
-def score_shadow_dataset(dataset: pd.DataFrame, spec: ShadowModelSpec) -> pd.DataFrame:
+def score_shadow_dataset(dataset: pd.DataFrame, spec: ShadowModelSpec, start: pd.Timestamp | None = None) -> pd.DataFrame:
+    # Build causal/rolling features over the full history first. Only then apply
+    # the shadow cohort start so rolling state is not reset at the boundary.
     df = build_causal_regime_features(dataset).sort_values("signal_time_utc").reset_index(drop=True)
+    df["signal_time_utc"] = pd.to_datetime(df["signal_time_utc"], utc=True, errors="coerce")
+    if start is not None:
+        start = pd.Timestamp(start)
+        start = start.tz_localize("UTC") if start.tzinfo is None else start.tz_convert("UTC")
+        df = df.loc[df["signal_time_utc"] >= start].copy()
+
     feature_cols = V3_NUMERIC_FEATURES + V3_CATEGORICAL_FEATURES
     path = Path(spec.model_path)
     if not path.exists():
         raise FileNotFoundError(f"Shadow model not found: {path}")
+    if df.empty:
+        return pd.DataFrame()
 
     model = joblib.load(path)
     probability = model.predict_proba(df[feature_cols])[:, 1]
     out = pd.DataFrame({
-        "signal_time_utc": pd.to_datetime(df["signal_time_utc"], utc=True, errors="coerce"),
+        "signal_time_utc": df["signal_time_utc"],
         "decision_time_utc": pd.to_datetime(df["decision_time_utc"], utc=True, errors="coerce"),
         "direction": df["direction"],
         "entry": pd.to_numeric(df["entry"], errors="coerce"),
@@ -48,13 +58,9 @@ def score_shadow_dataset(dataset: pd.DataFrame, spec: ShadowModelSpec) -> pd.Dat
         "hit_1_0r": df.get("hit_1_0r", np.nan),
         "hit_1_5r": df.get("hit_1_5r", np.nan),
     })
-
-    if spec.target_r == 1.0:
-        out["target"] = np.where(out["direction"].eq("BUY"), out["entry"] + (out["entry"] - out["stop"]), out["entry"] - (out["stop"] - out["entry"]))
-    else:
-        risk = (out["entry"] - out["stop"]).abs()
-        out["target"] = np.where(out["direction"].eq("BUY"), out["entry"] + spec.target_r * risk, out["entry"] - spec.target_r * risk)
-    return out
+    risk = (out["entry"] - out["stop"]).abs()
+    out["target"] = np.where(out["direction"].eq("BUY"), out["entry"] + spec.target_r * risk, out["entry"] - spec.target_r * risk)
+    return out.reset_index(drop=True)
 
 
 def upsert_shadow_journal(rows: pd.DataFrame, path: str | Path) -> pd.DataFrame:
@@ -62,11 +68,14 @@ def upsert_shadow_journal(rows: pd.DataFrame, path: str | Path) -> pd.DataFrame:
     output.parent.mkdir(parents=True, exist_ok=True)
     key = ["signal_time_utc", "direction", "target_r"]
     new = rows.copy()
+    if new.empty:
+        return pd.read_csv(output) if output.exists() else new
     new["signal_time_utc"] = pd.to_datetime(new["signal_time_utc"], utc=True, errors="coerce")
     if output.exists():
         old = pd.read_csv(output)
         old["signal_time_utc"] = pd.to_datetime(old["signal_time_utc"], utc=True, errors="coerce")
-        combined = pd.concat([old.astype(object), new.astype(object)], ignore_index=True, sort=False)
+        columns = list(dict.fromkeys([*old.columns, *new.columns]))
+        combined = pd.concat([old.reindex(columns=columns).astype(object), new.reindex(columns=columns).astype(object)], ignore_index=True, sort=False)
     else:
         combined = new
     combined = combined.sort_values("signal_time_utc").drop_duplicates(subset=key, keep="last").reset_index(drop=True)
