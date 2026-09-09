@@ -3,6 +3,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from backtesting.killzones import add_killzone_columns
+
 
 def _safe_rate(series: pd.Series) -> float:
     return float(series.mean()) if len(series) else 0.0
@@ -21,20 +23,23 @@ def _segment(df: pd.DataFrame, cols: list[str], min_samples: int) -> pd.DataFram
             "samples": int(len(group)),
             "hit_1r": _safe_rate(group["hit_1_0r"]),
             "hit_1_5r": _safe_rate(group["hit_1_5r"]),
-            "hit_2r": _safe_rate(group["hit_2_0r"]),
-            "hit_3r": _safe_rate(group["hit_3_0r"]),
+            "expectancy_1r": float(group["hit_1_0r"].mean() * 1.0 - (1.0 - group["hit_1_0r"].mean())),
+            "expectancy_1_5r": float(group["hit_1_5r"].mean() * 1.5 - (1.0 - group["hit_1_5r"].mean())),
             "avg_mfe_r": float(group["mfe_r"].mean()),
             "avg_mae_r": float(group["mae_r"].mean()),
         })
+        if "hit_2_0r" in group.columns:
+            row["hit_2r"] = _safe_rate(group["hit_2_0r"])
         rows.append(row)
     out = pd.DataFrame(rows)
     if not out.empty:
-        out = out.sort_values(["hit_2r", "samples"], ascending=[False, False]).reset_index(drop=True)
+        out = out.sort_values(["hit_1_5r", "hit_1r", "samples"], ascending=[False, False, False]).reset_index(drop=True)
     return out
 
 
 def add_research_buckets(dataset: pd.DataFrame) -> pd.DataFrame:
     df = dataset.copy()
+    df = add_killzone_columns(df)
     df["rsi_band"] = pd.cut(
         df["rsi14"],
         bins=[-np.inf, 30, 40, 50, 60, 70, np.inf],
@@ -62,8 +67,12 @@ def add_research_buckets(dataset: pd.DataFrame) -> pd.DataFrame:
 def build_segmentation_tables(dataset: pd.DataFrame, min_samples: int = 20) -> dict[str, pd.DataFrame]:
     df = add_research_buckets(dataset)
     ny = df[df["in_ny_08_13"]].copy()
+    killzone = df[df["killzone_name"] != "OUTSIDE"].copy()
 
     tables = {
+        "killzone": _segment(killzone, ["killzone_name"], min_samples),
+        "killzone_direction": _segment(killzone, ["killzone_name", "direction"], min_samples),
+        "killzone_direction_alignment": _segment(killzone, ["killzone_name", "direction", "alignment_count"], min_samples),
         "ny_hour": _segment(ny, ["ny_hour"], min_samples),
         "direction": _segment(df, ["direction"], min_samples),
         "weekday": _segment(df, ["day_of_week"], min_samples),
