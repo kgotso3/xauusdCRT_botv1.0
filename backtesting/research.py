@@ -9,6 +9,7 @@ from features.indicators import add_indicators, trend_bias
 from strategy.crt import detect_crt
 
 NY = ZoneInfo("America/New_York")
+H1_DELTA = pd.to_timedelta(1, unit="h")
 
 
 @dataclass(frozen=True)
@@ -19,7 +20,7 @@ class ResearchConfig:
 
 
 def _slice_completed(df: pd.DataFrame, decision_time: pd.Timestamp, timeframe_minutes: int) -> pd.DataFrame:
-    duration = pd.Timedelta(minutes=timeframe_minutes)
+    duration = pd.to_timedelta(timeframe_minutes, unit="min")
     return df.loc[(df["time"] + duration) <= decision_time].copy()
 
 
@@ -102,7 +103,7 @@ def build_crt_occurrence_dataset(
 
     for i in range(cfg.warmup_h1, len(h1) - 1):
         signal_bar = h1.iloc[i]
-        decision_time = pd.Timestamp(signal_bar["time"]) + pd.Timedelta(hours=1)
+        decision_time = pd.Timestamp(signal_bar["time"]) + H1_DELTA
         h1_hist = h1.iloc[: i + 1].copy()
 
         crt = detect_crt(h1_hist)
