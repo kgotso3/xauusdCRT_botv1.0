@@ -17,7 +17,7 @@ def main() -> None:
     args = parser.parse_args()
 
     dataset = pd.read_csv(args.dataset)
-    selected, candidates = train_ml_v1_2(
+    selected, candidates, selected_features = train_ml_v1_2(
         dataset,
         output_dir=args.models,
         report_dir=args.report,
@@ -50,9 +50,19 @@ def main() -> None:
     print("\nSELECTED MODEL REPORT")
     print(selected[selected_cols].to_string(index=False))
 
+    if not selected_features.empty:
+        print("\nTOP TRAIN-SELECTED FEATURES")
+        top = (
+            selected_features.sort_values(["target", "mutual_info_train"], ascending=[True, False])
+            .groupby("target", group_keys=False)
+            .head(12)
+        )
+        print(top.to_string(index=False))
+
     report_path = Path(args.report)
     print(f"\nCandidate CSV: {report_path / 'ml_v1_2_candidates.csv'}")
     print(f"Selected CSV:  {report_path / 'ml_v1_2_selected.csv'}")
+    print(f"Features CSV:  {report_path / 'ml_v1_2_selected_features.csv'}")
     print("TEST remains audit-only. Do not tune V1.2 from TEST results; use a future forward holdout for subsequent rule/model changes.")
 
 
