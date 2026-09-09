@@ -36,6 +36,10 @@ def _target_col(target: str) -> str:
     return mapping[target]
 
 
+def _target_final_col(target: str) -> str:
+    return "outcome_final_1_0r" if target == "1R" else "outcome_final_1_5r"
+
+
 def _features_for_version(dataset: pd.DataFrame, version: str) -> tuple[pd.DataFrame, list[str]]:
     if version == "V1":
         return build_causal_v2_features(dataset), NUMERIC_FEATURES + CATEGORICAL_FEATURES
@@ -72,8 +76,12 @@ def score_forward_occurrences(
         model = joblib.load(model_path)
         probabilities = model.predict_proba(forward[feature_cols])[:, 1]
         target_col = _target_col(spec.target)
+        final_col = _target_final_col(spec.target)
 
         for (_, row), prob in zip(forward.iterrows(), probabilities):
+            outcome_final = bool(row.get(final_col, False)) if pd.notna(row.get(final_col, np.nan)) else False
+            label = row.get(target_col, np.nan) if outcome_final else np.nan
+            hit_stop = row.get("hit_stop", np.nan) if outcome_final else np.nan
             rows.append({
                 "model_version": spec.version,
                 "target": spec.target,
@@ -85,9 +93,11 @@ def score_forward_occurrences(
                 "killzone_name": row.get("killzone_name"),
                 "probability": float(prob),
                 "selected_at_threshold": bool(prob >= spec.threshold),
-                "label": row.get(target_col, np.nan),
-                "hit_stop": row.get("hit_stop", np.nan),
+                "outcome_final": outcome_final,
+                "label": label,
+                "hit_stop": hit_stop,
                 "ambiguous_intrabar": row.get("ambiguous_intrabar", np.nan),
+                "outcome_bars_observed": row.get("outcome_bars_observed", np.nan),
             })
 
     out = pd.DataFrame(rows)
@@ -153,6 +163,7 @@ def forward_metrics(journal: pd.DataFrame) -> pd.DataFrame:
             "model_version": version,
             "target": target,
             "forward_predictions": int(len(grp)),
+            "pending_predictions": int(grp["label"].isna().sum()),
             "labelled_predictions": int(len(labelled)),
             "positive_rate": float(labelled["label"].mean()) if len(labelled) else float("nan"),
             "roc_auc": auc,
