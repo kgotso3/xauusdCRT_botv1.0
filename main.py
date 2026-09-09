@@ -27,15 +27,17 @@ def run(mode: str) -> None:
             print(f"Symbol resolved: {requested_symbol} -> {symbol}")
 
         tick = latest_tick(symbol)
+        print(f"MT5 latest tick UTC: {tick['time'].isoformat()}")
         print(
             f"{symbol} bid={tick['bid']} ask={tick['ask']} "
             f"spread={tick['spread']} ({tick['spread_points']:.1f} points)"
         )
 
-        # completed_only=True skips MT5 bar position 0, which is still forming.
-        h1 = get_rates(symbol, "H1", 300, completed_only=True)
-        m15 = get_rates(symbol, "M15", 300, completed_only=True)
-        m5 = get_rates(symbol, "M5", 300, completed_only=True)
+        # Position 0 is still forming; asof=tick time adds a second safety check
+        # so a future/incomplete bar can never reach the signal engine.
+        h1 = get_rates(symbol, "H1", 300, completed_only=True, asof=tick["time"])
+        m15 = get_rates(symbol, "M15", 300, completed_only=True, asof=tick["time"])
+        m5 = get_rates(symbol, "M5", 300, completed_only=True, asof=tick["time"])
         signal = build_signal(h1, m15, m5, now=tick["time"])
 
         h1_bar_time = h1.iloc[-1]["time"]
@@ -66,7 +68,6 @@ def run(mode: str) -> None:
             print("NO TRADE: maximum open positions reached.")
             return
 
-        # Structural stop is based on the latest completed H1 candle only.
         row = h1.iloc[-1]
         entry = tick["ask"] if signal["direction"] == "BUY" else tick["bid"]
         if signal["direction"] == "BUY":
