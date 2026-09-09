@@ -4,34 +4,59 @@ import argparse
 
 import MetaTrader5 as mt5
 
+from database.journal import execution_status, make_signal_id, mark_execution, record_signal
 from mt5.connection import connect, disconnect
-from mt5.market_data import get_rates, latest_tick
-from mt5.execution import market_order
-from risk.position_size import calculate_volume
+from mt5.execution import market_order, validate_trade_levels
+from mt5.market_data import get_rates, latest_tick, resolve_symbol
+from risk.position_size import calculate_mt5_volume
 from strategy.signal_engine import build_signal
 
 
 def run(mode: str) -> None:
     settings = connect()
     try:
-        symbol = settings.symbol
+        requested_symbol = settings.symbol
+        symbol = resolve_symbol(requested_symbol)
         account = mt5.account_info()
-        print(f"Connected: login={account.login} server={account.server} balance={account.balance:.2f} currency={account.currency}")
+        print(
+            f"Connected: login={account.login} server={account.server} "
+            f"balance={account.balance:.2f} equity={account.equity:.2f} currency={account.currency}"
+        )
         print("Safety: MT5 DEMO account verified")
+        if symbol != requested_symbol:
+            print(f"Symbol resolved: {requested_symbol} -> {symbol}")
 
         tick = latest_tick(symbol)
-        print(f"{symbol} bid={tick['bid']} ask={tick['ask']} spread={tick['spread']}")
+        print(
+            f"{symbol} bid={tick['bid']} ask={tick['ask']} "
+            f"spread={tick['spread']} ({tick['spread_points']:.1f} points)"
+        )
 
-        h1 = get_rates(symbol, "H1", 300)
-        m15 = get_rates(symbol, "M15", 300)
-        m5 = get_rates(symbol, "M5", 300)
+        # completed_only=True skips MT5 bar position 0, which is still forming.
+        h1 = get_rates(symbol, "H1", 300, completed_only=True)
+        m15 = get_rates(symbol, "M15", 300, completed_only=True)
+        m5 = get_rates(symbol, "M5", 300, completed_only=True)
         signal = build_signal(h1, m15, m5, now=tick["time"])
+
+        h1_bar_time = h1.iloc[-1]["time"]
+        signal_id = make_signal_id(symbol, h1_bar_time, signal["direction"])
+        is_new = record_signal(signal_id, symbol, h1_bar_time, signal)
+
+        print(f"Last completed H1 bar: {h1_bar_time}")
         print("SIGNAL:", signal)
+        print(f"Signal ID: {signal_id}")
+        if not is_new:
+            print("Journal: signal already recorded.")
 
         if mode != "demo":
             return
         if not signal["approved"]:
             print("NO TRADE: setup/session requirements not met.")
+            return
+
+        prior_status = execution_status(signal_id)
+        if prior_status in {"PENDING", "SENT"}:
+            print(f"NO TRADE: duplicate execution blocked; journal status={prior_status}.")
             return
 
         positions = mt5.positions_get(symbol=symbol)
@@ -41,6 +66,7 @@ def run(mode: str) -> None:
             print("NO TRADE: maximum open positions reached.")
             return
 
+        # Structural stop is based on the latest completed H1 candle only.
         row = h1.iloc[-1]
         entry = tick["ask"] if signal["direction"] == "BUY" else tick["bid"]
         if signal["direction"] == "BUY":
@@ -55,25 +81,46 @@ def run(mode: str) -> None:
         if distance <= 0:
             raise RuntimeError("Invalid structural stop distance; trade blocked.")
 
-        info = mt5.symbol_info(symbol)
-        volume = calculate_volume(
-            account_balance=float(account.balance),
+        entry, sl, tp = validate_trade_levels(symbol, signal["direction"], entry, sl, tp)
+        volume, risk_budget, estimated_loss = calculate_mt5_volume(
+            symbol=symbol,
+            direction=signal["direction"],
+            account_equity=float(account.equity),
             risk_fraction=settings.risk_per_trade,
             entry=float(entry),
             stop=float(sl),
-            tick_size=float(info.trade_tick_size or info.point),
-            tick_value=float(info.trade_tick_value),
-            volume_min=float(info.volume_min),
-            volume_max=float(info.volume_max),
-            volume_step=float(info.volume_step),
         )
         if volume <= 0:
-            print("NO TRADE: broker minimum lot would exceed configured risk.")
+            print(
+                "NO TRADE: broker minimum lot would exceed configured risk. "
+                f"Risk budget={risk_budget:.2f} {account.currency}; "
+                f"minimum-lot estimated loss={estimated_loss:.2f} {account.currency}."
+            )
             return
 
-        print(f"DEMO ORDER CANDIDATE: {signal['direction']} {volume} {symbol} entry={entry} sl={sl} tp={tp}")
-        result = market_order(symbol, signal["direction"], volume, sl, tp)
-        print(f"DEMO ORDER SENT: order={getattr(result, 'order', None)} deal={getattr(result, 'deal', None)}")
+        print(
+            f"DEMO ORDER CANDIDATE: {signal['direction']} {volume} {symbol} "
+            f"entry={entry} sl={sl} tp={tp} risk_budget={risk_budget:.2f} "
+            f"estimated_stop_loss={estimated_loss:.2f} {account.currency}"
+        )
+
+        mark_execution(signal_id, "PENDING")
+        try:
+            result = market_order(symbol, signal["direction"], volume, sl, tp)
+        except Exception as exc:
+            mark_execution(signal_id, "ERROR", error_text=str(exc))
+            raise
+
+        mark_execution(
+            signal_id,
+            "SENT",
+            order_ticket=getattr(result, "order", None),
+            deal_ticket=getattr(result, "deal", None),
+        )
+        print(
+            f"DEMO ORDER SENT: order={getattr(result, 'order', None)} "
+            f"deal={getattr(result, 'deal', None)}"
+        )
     finally:
         disconnect()
 
