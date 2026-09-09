@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import timedelta
 
 import pandas as pd
 
@@ -41,7 +40,8 @@ def _simulate_exit(
     if risk <= 0:
         raise ValueError("risk distance must be positive")
 
-    for held, (_, bar) in enumerate(future_h1.head(max_holding_bars).iterrows(), start=1):
+    sample = future_h1.head(max_holding_bars)
+    for held, (_, bar) in enumerate(sample.iterrows(), start=1):
         high = float(bar["high"])
         low = float(bar["low"])
 
@@ -78,10 +78,10 @@ def _simulate_exit(
                 "mae_r": float(mae_r),
             }
 
-    if future_h1.empty:
+    if sample.empty:
         return {}
 
-    final = future_h1.head(max_holding_bars).iloc[-1]
+    final = sample.iloc[-1]
     exit_price = float(final["close"])
     r_multiple = (
         (exit_price - entry) / risk if direction == "BUY" else (entry - exit_price) / risk
@@ -91,7 +91,7 @@ def _simulate_exit(
         "exit_price": exit_price,
         "exit_reason": "TIME",
         "r_multiple": float(r_multiple),
-        "bars_held": int(min(max_holding_bars, len(future_h1))),
+        "bars_held": int(len(sample)),
         "mfe_r": float(mfe_r),
         "mae_r": float(mae_r),
     }
@@ -103,9 +103,14 @@ def run_backtest(
     m5: pd.DataFrame,
     config: BacktestConfig | None = None,
 ) -> tuple[pd.DataFrame, dict]:
-    """Run a no-lookahead CRT backtest using next-H1-open entries."""
+    """Run a no-lookahead CRT backtest using next-H1-open entries.
+
+    The engine mirrors the live V1 one-position rule: a new historical signal
+    is ignored while a previously simulated position is still open.
+    """
     cfg = config or BacktestConfig()
     records: list[dict] = []
+    position_open_until: pd.Timestamp | None = None
 
     if len(h1) <= cfg.warmup_h1 + 1:
         trades = pd.DataFrame()
@@ -114,6 +119,9 @@ def run_backtest(
     for i in range(cfg.warmup_h1, len(h1) - 1):
         signal_bar = h1.iloc[i]
         decision_time = pd.Timestamp(signal_bar["time"]) + pd.Timedelta(hours=1)
+
+        if position_open_until is not None and decision_time <= position_open_until:
+            continue
 
         h1_hist = h1.iloc[: i + 1].copy()
         m15_hist = _slice_completed(m15, decision_time, 15)
@@ -158,6 +166,7 @@ def run_backtest(
         if not outcome:
             continue
 
+        position_open_until = pd.Timestamp(outcome["exit_time"])
         records.append(
             {
                 "signal_time": signal_bar["time"],
