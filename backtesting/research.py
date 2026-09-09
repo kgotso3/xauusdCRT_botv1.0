@@ -54,10 +54,7 @@ def _previous_ny_day_range(h1_hist: pd.DataFrame, decision_time: pd.Timestamp) -
     prev = hist.loc[ny_dates == prev_date]
     if prev.empty:
         return {"prev_day_high": None, "prev_day_low": None, "distance_prev_day_high_atr": None, "distance_prev_day_low_atr": None}
-    return {
-        "prev_day_high": float(prev["high"].max()),
-        "prev_day_low": float(prev["low"].min()),
-    }
+    return {"prev_day_high": float(prev["high"].max()), "prev_day_low": float(prev["low"].min())}
 
 
 def _target_outcomes(
@@ -79,8 +76,10 @@ def _target_outcomes(
     mfe_r = 0.0
     mae_r = 0.0
     ambiguous_intrabar = False
+    observed_bars = 0
 
     for held, (_, bar) in enumerate(future_h1.head(max_holding_bars).iterrows(), start=1):
+        observed_bars = held
         high = float(bar["high"])
         low = float(bar["low"])
 
@@ -98,8 +97,6 @@ def _target_outcomes(
         if bar_stop and any(target_touched.values()):
             ambiguous_intrabar = True
 
-        # Conservative OHLC assumption: if stop and target are both touched
-        # in the same H1 bar, count the stop first because intrabar path is unknown.
         if bar_stop:
             stop_hit = True
             bars_to_stop = held
@@ -110,17 +107,22 @@ def _target_outcomes(
                 hit[r] = True
                 bars_to_target[r] = held
 
+    horizon_complete = observed_bars >= max_holding_bars
     out = {
         "hit_stop": stop_hit,
         "bars_to_stop": bars_to_stop,
         "mfe_r": float(mfe_r),
         "mae_r": float(mae_r),
         "ambiguous_intrabar": bool(ambiguous_intrabar),
+        "outcome_bars_observed": int(observed_bars),
+        "outcome_horizon_complete": bool(horizon_complete),
     }
     for r in target_rs:
         key = str(r).replace(".", "_")
+        target_final = bool(hit[r] or stop_hit or horizon_complete)
         out[f"hit_{key}r"] = bool(hit[r])
         out[f"bars_to_{key}r"] = bars_to_target[r]
+        out[f"outcome_final_{key}r"] = target_final
     return out
 
 
@@ -137,8 +139,6 @@ def build_crt_occurrence_dataset(
     if len(h1) <= cfg.warmup_h1 + 1:
         return pd.DataFrame()
 
-    # Precompute H1 indicators once. Lower-timeframe indicators remain sliced
-    # causally because only data completed by decision time may be used.
     h1_all_ind = add_indicators(h1)
 
     for i in range(cfg.warmup_h1, len(h1) - 1):
