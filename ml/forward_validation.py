@@ -106,20 +106,32 @@ def score_forward_occurrences(
     return out
 
 
+def _normalize_journal_keys(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    if out.empty:
+        return out
+    out["signal_time_utc"] = pd.to_datetime(out["signal_time_utc"], utc=True, errors="coerce")
+    out["decision_time_utc"] = pd.to_datetime(out["decision_time_utc"], utc=True, errors="coerce")
+    for col in ("model_version", "target", "direction"):
+        if col in out.columns:
+            out[col] = out[col].astype("string").str.strip()
+    return out
+
+
 def upsert_prediction_journal(new_rows: pd.DataFrame, journal_path: str | Path) -> pd.DataFrame:
     path = Path(journal_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     key = ["model_version", "target", "signal_time_utc", "direction"]
 
+    normalized_new = _normalize_journal_keys(new_rows)
     if path.exists():
-        old = pd.read_csv(path)
-        combined = pd.concat([old, new_rows], ignore_index=True, sort=False)
+        old = _normalize_journal_keys(pd.read_csv(path))
+        combined = pd.concat([old, normalized_new], ignore_index=True, sort=False)
     else:
-        combined = new_rows.copy()
+        combined = normalized_new.copy()
 
     if not combined.empty:
-        combined["signal_time_utc"] = pd.to_datetime(combined["signal_time_utc"], utc=True, errors="coerce")
-        combined["decision_time_utc"] = pd.to_datetime(combined["decision_time_utc"], utc=True, errors="coerce")
+        combined = _normalize_journal_keys(combined)
         combined = combined.sort_values("signal_time_utc")
         combined = combined.drop_duplicates(subset=key, keep="last").reset_index(drop=True)
         combined.to_csv(path, index=False)
