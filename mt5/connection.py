@@ -19,6 +19,7 @@ class MT5Settings:
     risk_per_trade: float
     max_daily_loss: float
     max_open_positions: int
+    max_spread_points: float
 
 
 def load_settings() -> MT5Settings:
@@ -33,6 +34,7 @@ def load_settings() -> MT5Settings:
         risk_per_trade=float(os.getenv("RISK_PER_TRADE", "0.0025")),
         max_daily_loss=float(os.getenv("MAX_DAILY_LOSS", "0.02")),
         max_open_positions=int(os.getenv("MAX_OPEN_POSITIONS", "1")),
+        max_spread_points=float(os.getenv("MAX_SPREAD_POINTS", "80")),
     )
 
 
@@ -40,6 +42,8 @@ def connect() -> MT5Settings:
     settings = load_settings()
     if settings.mode != "DEMO":
         raise RuntimeError("V1 safety lock: TRADING_MODE must be DEMO.")
+    if settings.max_spread_points <= 0:
+        raise RuntimeError("MAX_SPREAD_POINTS must be greater than zero.")
 
     if not Path(settings.path).exists():
         raise RuntimeError(f"MT5 terminal not found at: {settings.path}")
