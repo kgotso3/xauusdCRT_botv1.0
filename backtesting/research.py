@@ -16,7 +16,7 @@ H1_DELTA = pd.to_timedelta(1, unit="h")
 class ResearchConfig:
     warmup_h1: int = 220
     max_holding_bars: int = 24
-    target_rs: tuple[float, ...] = (1.0, 1.5, 2.0, 3.0)
+    target_rs: tuple[float, ...] = (1.0, 1.5)
 
 
 def _slice_completed(df: pd.DataFrame, decision_time: pd.Timestamp, timeframe_minutes: int) -> pd.DataFrame:
