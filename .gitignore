@@ -13,3 +13,4 @@ models/*.pkl
 models/*.joblib
 data/*.csv
 data/*.parquet
+data/backtests/
