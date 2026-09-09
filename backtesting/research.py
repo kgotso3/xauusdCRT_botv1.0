@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 
 from features.indicators import add_indicators, trend_bias
+from features.session_liquidity import build_completed_session_liquidity_features
 from strategy.crt import detect_crt
 
 NY = ZoneInfo("America/New_York")
@@ -198,6 +199,14 @@ def build_crt_occurrence_dataset(
         prev_day_low = prev_day.get("prev_day_low")
         prev_day["distance_prev_day_high_atr"] = (prev_day_high - close) / safe_atr if safe_atr and prev_day_high is not None else None
         prev_day["distance_prev_day_low_atr"] = (close - prev_day_low) / safe_atr if safe_atr and prev_day_low is not None else None
+        session_liquidity = build_completed_session_liquidity_features(
+            h1_hist=h1_hist,
+            decision_time=decision_time,
+            close=close,
+            signal_high=float(signal_bar["high"]),
+            signal_low=float(signal_bar["low"]),
+            atr=atr,
+        )
 
         rows.append({
             "signal_time_utc": signal_bar["time"],
@@ -245,6 +254,7 @@ def build_crt_occurrence_dataset(
             "risk_distance": risk,
             **recent,
             **prev_day,
+            **session_liquidity,
             **outcomes,
         })
 
