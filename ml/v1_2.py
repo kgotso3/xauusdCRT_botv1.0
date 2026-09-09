@@ -23,12 +23,30 @@ from features.v1_2_features import (
 )
 
 
+V12_REQUIRED_RAW_COLUMNS = {
+    "ema20_slope_4h", "macd", "macd_signal", "macd_hist",
+    "return_1h", "return_4h", "return_8h", "atr_change_4h",
+    "range_position_4h", "range_position_8h", "range_position_24h",
+    "distance_recent_high_24h_atr", "distance_recent_low_24h_atr",
+    "prev_day_high", "prev_day_low",
+}
+
+
 @dataclass(frozen=True)
 class MLV12Config:
     train_fraction: float = 0.60
     validation_fraction: float = 0.20
     random_state: int = 42
     select_k: int = 28
+
+
+def validate_v1_2_dataset(dataset: pd.DataFrame) -> None:
+    missing = sorted(V12_REQUIRED_RAW_COLUMNS.difference(dataset.columns))
+    if missing:
+        raise ValueError(
+            "Dataset predates ML V1.2 research features. Rebuild it with the updated "
+            "run_research.py before training. Missing columns: " + ", ".join(missing)
+        )
 
 
 def chronological_split(df: pd.DataFrame, config: MLV12Config | None = None) -> pd.DataFrame:
@@ -119,12 +137,30 @@ def _candidate_score(metrics: dict[str, float]) -> tuple[float, float]:
     return (-auc, metrics["brier"])
 
 
+def _selected_feature_rows(target_name: str, model_name: str, pipe: Pipeline) -> list[dict]:
+    names = pipe.named_steps["preprocess"].get_feature_names_out()
+    selector = pipe.named_steps["select"]
+    support = selector.get_support()
+    scores = selector.scores_
+    rows = []
+    for name, keep, score in zip(names, support, scores):
+        if keep:
+            rows.append({
+                "target": target_name,
+                "selected_model": model_name,
+                "feature": str(name),
+                "mutual_info_train": float(score) if score is not None and np.isfinite(score) else float("nan"),
+            })
+    return sorted(rows, key=lambda row: row["mutual_info_train"], reverse=True)
+
+
 def train_ml_v1_2(
     dataset: pd.DataFrame,
     output_dir: str | Path = "data/models",
     report_dir: str | Path = "data/research/ml_v1_2",
     config: MLV12Config | None = None,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    validate_v1_2_dataset(dataset)
     cfg = config or MLV12Config()
     df = chronological_split(build_causal_v1_2_features(dataset), cfg)
     feature_cols = V12_NUMERIC_FEATURES + V12_CATEGORICAL_FEATURES
@@ -136,6 +172,7 @@ def train_ml_v1_2(
 
     candidate_rows: list[dict] = []
     selected_rows: list[dict] = []
+    feature_rows: list[dict] = []
 
     for target_name, target_col in V12_TARGETS.items():
         target_df = df.dropna(subset=[target_col]).copy()
@@ -168,6 +205,7 @@ def train_ml_v1_2(
 
         model_path = model_output / f"crt_v2_{target_name.replace('.', '_')}_v1_2_{best_name}.joblib"
         joblib.dump(best_pipe, model_path)
+        feature_rows.extend(_selected_feature_rows(target_name, best_name, best_pipe))
 
         selected_rows.append({
             "target": target_name,
@@ -184,6 +222,8 @@ def train_ml_v1_2(
 
     candidates_df = pd.DataFrame(candidate_rows)
     selected_df = pd.DataFrame(selected_rows)
+    features_df = pd.DataFrame(feature_rows)
     candidates_df.to_csv(report_output / "ml_v1_2_candidates.csv", index=False)
     selected_df.to_csv(report_output / "ml_v1_2_selected.csv", index=False)
-    return selected_df, candidates_df
+    features_df.to_csv(report_output / "ml_v1_2_selected_features.csv", index=False)
+    return selected_df, candidates_df, features_df
