@@ -9,7 +9,7 @@ def detect_crt(df: pd.DataFrame) -> dict:
     The previous completed candle defines the reference range. The latest
     completed candle must sweep one side and close back inside that range.
     """
-    if len(df) < 3:
+    if len(df) < 2:
         return {"direction": "NONE", "swept": False, "score": 0}
 
     prev = df.iloc[-2]
@@ -17,8 +17,14 @@ def detect_crt(df: pd.DataFrame) -> dict:
     direction = "NONE"
     swept = False
 
-    bullish = cur["low"] < prev["low"] and cur["close"] > prev["low"] and cur["close"] <= prev["high"]
-    bearish = cur["high"] > prev["high"] and cur["close"] < prev["high"] and cur["close"] >= prev["low"]
+    bullish = (
+        cur["low"] < prev["low"]
+        and prev["low"] < cur["close"] <= prev["high"]
+    )
+    bearish = (
+        cur["high"] > prev["high"]
+        and prev["low"] <= cur["close"] < prev["high"]
+    )
 
     if bullish:
         direction, swept = "BULLISH", True
