@@ -36,7 +36,13 @@ def build_signal(h1, m15, m5, now: datetime | None = None, minimum_score: int = 
         score += 20
         reasons.append("M5 confirms H1")
 
-    direction = bias if session_ok and score >= minimum_score and bias != "NEUTRAL" else "NONE"
+    direction = "NONE"
+    if session_ok and score >= minimum_score:
+        if bias == "BULLISH":
+            direction = "BUY"
+        elif bias == "BEARISH":
+            direction = "SELL"
+
     return {
         "direction": direction,
         "score": score,
