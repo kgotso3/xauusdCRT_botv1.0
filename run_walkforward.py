@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from backtesting.candidate_gate import apply_candidate_gate
 from backtesting.walkforward import SplitConfig, build_walkforward_report
 
 
@@ -27,6 +28,7 @@ def main() -> None:
         df,
         SplitConfig(min_samples_per_split=args.min_split_samples),
     )
+    report = apply_candidate_gate(report)
 
     stem = dataset_path.stem
     report_path = output_dir / f"{stem}_candidate_validation.csv"
@@ -40,22 +42,32 @@ def main() -> None:
     print("Killzones (New York local time): ASIA 20:00-00:00 | LONDON 02:00-05:00 | NEW_YORK 08:00-11:00")
 
     stable = report[report["sample_stable"]].copy() if not report.empty else report
-    print(f"Candidates evaluated: {len(report)} | sample-stable: {len(stable)}")
+    strict = report[report["strict_pass"]].copy() if not report.empty else report
+    print(f"Candidates evaluated: {len(report)} | sample-stable: {len(stable)} | strict-pass: {len(strict)}")
+
+    cols = [
+        "candidate", "research_status", "samples_total",
+        "train_hit_1r", "train_hit_1_5r",
+        "validation_hit_1r", "validation_hit_1_5r",
+        "test_hit_1r", "test_hit_1_5r",
+        "validation_exp_1r", "validation_exp_1_5r",
+        "test_exp_1r", "test_exp_1_5r",
+        "strict_pass",
+    ]
+
+    print("\nSTRICT PASS CANDIDATES")
+    if strict.empty:
+        print("None. V2 execution rules remain disabled; continue research without tuning to TEST.")
+    else:
+        print(strict[cols].to_string(index=False))
+
     if not stable.empty:
-        cols = [
-            "candidate", "samples_total",
-            "train_hit_1r", "train_hit_1_5r",
-            "validation_hit_1r", "validation_hit_1_5r",
-            "test_hit_1r", "test_hit_1_5r",
-            "validation_exp_1r", "validation_exp_1_5r",
-            "test_exp_1r", "test_exp_1_5r", "test_positive_both",
-        ]
-        print("\nTOP VALIDATED CANDIDATES")
+        print("\nTOP RESEARCH CANDIDATES")
         print(stable[cols].head(15).to_string(index=False))
 
     print(f"\nCandidate report: {report_path}")
     print(f"Period stability: {period_path}")
-    print("\nImportant: TEST is an untouched chronological holdout. Do not tune candidate rules using TEST results.")
+    print("\nImportant: TEST has now been inspected. Do not invent or tune new filters from TEST results; future rule changes require a new forward holdout period.")
 
 
 if __name__ == "__main__":
