@@ -49,6 +49,15 @@ def signal_seen(signal_id: str, db_path: Path = DEFAULT_DB) -> bool:
     return row is not None
 
 
+def execution_status(signal_id: str, db_path: Path = DEFAULT_DB) -> str | None:
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT execution_status FROM signals WHERE signal_id = ? LIMIT 1",
+            (signal_id,),
+        ).fetchone()
+    return None if row is None else str(row[0])
+
+
 def record_signal(
     signal_id: str,
     symbol: str,
