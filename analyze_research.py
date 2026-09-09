@@ -33,6 +33,7 @@ def main() -> None:
         print(f"First signal: {df['signal_time_utc'].min()}")
         print(f"Last signal: {df['signal_time_utc'].max()}")
     print(f"NY-window occurrences: {int(df['in_ny_08_13'].sum())}")
+    print("Ranking focus: 1R and 1.5R targets")
 
     tables = build_segmentation_tables(df, min_samples=args.min_samples)
     stem = dataset_path.stem
@@ -40,7 +41,7 @@ def main() -> None:
         path = output_dir / f"{stem}_{name}.csv"
         table.to_csv(path, index=False)
 
-    print("\nTOP 2R SEGMENTS")
+    print("\nTOP 1.5R SEGMENTS")
     candidates = []
     for name, table in tables.items():
         if table.empty:
@@ -50,9 +51,13 @@ def main() -> None:
         candidates.append(top)
     ranked = pd.DataFrame(candidates)
     if not ranked.empty:
-        ranked = ranked.sort_values(["hit_2r", "samples"], ascending=[False, False])
-        display_cols = [c for c in ["segment_table", "direction", "ny_hour", "alignment_count", "day_of_week", "rsi_band", "volatility_regime", "sweep_atr_band", "samples", "hit_1r", "hit_2r", "hit_3r", "avg_mfe_r", "avg_mae_r"] if c in ranked.columns]
-        print(ranked[display_cols].head(10).to_string(index=False))
+        ranked = ranked.sort_values(["hit_1_5r", "hit_1r", "samples"], ascending=[False, False, False])
+        display_cols = [c for c in [
+            "segment_table", "killzone_name", "direction", "ny_hour", "alignment_count",
+            "day_of_week", "rsi_band", "volatility_regime", "sweep_atr_band", "samples",
+            "hit_1r", "hit_1_5r", "expectancy_1r", "expectancy_1_5r", "avg_mfe_r", "avg_mae_r"
+        ] if c in ranked.columns]
+        print(ranked[display_cols].head(12).to_string(index=False))
 
     print(f"\nSegment CSVs saved to: {output_dir}")
 
