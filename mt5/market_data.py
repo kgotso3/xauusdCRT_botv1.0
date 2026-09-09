@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import MetaTrader5 as mt5
 import pandas as pd
@@ -12,18 +12,20 @@ TIMEFRAME_MAP = {
     "H1": mt5.TIMEFRAME_H1,
 }
 
+TIMEFRAME_DURATION = {
+    "M1": timedelta(minutes=1),
+    "M5": timedelta(minutes=5),
+    "M15": timedelta(minutes=15),
+    "H1": timedelta(hours=1),
+}
+
 
 def _norm_symbol(name: str) -> str:
     return "".join(ch for ch in name.upper() if ch.isalnum())
 
 
 def resolve_symbol(preferred: str) -> str:
-    """Resolve a logical gold symbol to the broker's actual MT5 symbol name.
-
-    Exact matches are preferred. For XAUUSD/GOLD we then try common broker
-    aliases and suffix variants, while avoiding unrelated equity names that
-    merely contain the word 'Gold'.
-    """
+    """Resolve a logical gold symbol to the broker's actual MT5 symbol name."""
     preferred = preferred.strip()
     info = mt5.symbol_info(preferred)
     if info is not None:
@@ -86,11 +88,15 @@ def get_rates(
     timeframe: str,
     count: int = 300,
     completed_only: bool = True,
+    asof: datetime | None = None,
 ) -> pd.DataFrame:
-    """Return MT5 rates in chronological order.
+    """Return MT5 rates in chronological order with a completion safety check.
 
-    MT5 bar position 0 is the current forming candle. Strategy calculations use
-    start position 1 by default so signals are based only on completed candles.
+    MT5 position 0 is the current forming candle, so completed-only requests
+    begin at position 1. When ``asof`` is supplied (normally the latest tick
+    timestamp), every returned bar is additionally required to have fully
+    closed by that timestamp. This blocks execution if MT5 timestamps appear
+    to be in the future or otherwise inconsistent.
     """
     ensure_symbol(symbol)
     if timeframe not in TIMEFRAME_MAP:
@@ -103,7 +109,23 @@ def get_rates(
 
     df = pd.DataFrame(rates)
     df["time"] = pd.to_datetime(df["time"], unit="s", utc=True)
-    return df.sort_values("time").reset_index(drop=True)
+    df = df.sort_values("time").reset_index(drop=True)
+
+    if completed_only and asof is not None:
+        if asof.tzinfo is None:
+            raise ValueError("asof must be timezone-aware")
+        asof_utc = asof.astimezone(timezone.utc)
+        duration = TIMEFRAME_DURATION[timeframe]
+        close_times = df["time"] + duration
+        valid = close_times <= pd.Timestamp(asof_utc)
+        if not bool(valid.all()):
+            bad = df.loc[~valid, "time"].iloc[-1]
+            raise RuntimeError(
+                f"MT5 {timeframe} timestamp safety check failed: bar {bad} has not "
+                f"completed by latest tick time {asof_utc.isoformat()}. Trade blocked."
+            )
+
+    return df
 
 
 def latest_tick(symbol: str) -> dict:
