@@ -58,12 +58,13 @@ def _dataset(n=240):
 
 
 def test_coverage_reports_common_overlap():
-    h1 = pd.DataFrame({"time": pd.date_range("2025-01-01", periods=10, freq="h", tz="UTC")})
-    m15 = pd.DataFrame({"time": pd.date_range("2025-01-02", periods=20, freq="15min", tz="UTC")})
-    m5 = pd.DataFrame({"time": pd.date_range("2025-01-02 01:00", periods=40, freq="5min", tz="UTC")})
+    h1 = pd.DataFrame({"time": pd.date_range("2025-01-01", periods=72, freq="h", tz="UTC")})
+    m15 = pd.DataFrame({"time": pd.date_range("2025-01-02", periods=160, freq="15min", tz="UTC")})
+    m5 = pd.DataFrame({"time": pd.date_range("2025-01-02 01:00", periods=400, freq="5min", tz="UTC")})
     out = coverage_table({"H1": h1, "M15": m15, "M5": m5})
     assert len(out) == 3
     assert out["common_start"].notna().all()
+    assert out["common_end"].notna().all()
 
 
 def test_causal_volatility_feature_does_not_change_past_when_future_changes():
