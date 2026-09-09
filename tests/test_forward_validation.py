@@ -24,8 +24,8 @@ def test_forward_journal_upserts_same_signal(tmp_path):
     first = pd.DataFrame([{
         "model_version":"V1.2","target":"1R","signal_time_utc":"2026-09-02T10:00:00Z",
         "decision_time_utc":"2026-09-02T11:00:00Z","direction":"BUY","probability":0.60,
-        "threshold_frozen":0.50,"label":np.nan,"hit_stop":np.nan,
-    }])
+        "threshold_frozen":0.50,"label":np.nan,"hit_stop":pd.NA,
+    }]).astype({"hit_stop":"boolean"})
     second = first.copy()
     second.loc[0, "probability"] = 0.60
     second.loc[0, "label"] = 1
