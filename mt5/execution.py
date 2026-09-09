@@ -24,6 +24,55 @@ def _filling_mode(info) -> int:
     return mt5.ORDER_FILLING_IOC
 
 
+def validate_trade_levels(symbol: str, direction: str, entry: float, sl: float, tp: float) -> tuple[float, float, float]:
+    info = mt5.symbol_info(symbol)
+    if info is None:
+        raise RuntimeError(f"Unable to read symbol information for {symbol}.")
+
+    point = float(info.point or 0.0)
+    digits = int(info.digits)
+    if point <= 0:
+        raise RuntimeError(f"Invalid point size for {symbol}.")
+
+    entry = round(float(entry), digits)
+    sl = round(float(sl), digits)
+    tp = round(float(tp), digits)
+
+    direction = direction.upper()
+    if direction == "BUY":
+        if not sl < entry < tp:
+            raise RuntimeError("Invalid BUY levels: require SL < entry < TP.")
+        sl_distance = entry - sl
+        tp_distance = tp - entry
+    elif direction == "SELL":
+        if not tp < entry < sl:
+            raise RuntimeError("Invalid SELL levels: require TP < entry < SL.")
+        sl_distance = sl - entry
+        tp_distance = entry - tp
+    else:
+        raise ValueError("direction must be BUY or SELL")
+
+    stops_level = int(getattr(info, "trade_stops_level", 0) or 0)
+    freeze_level = int(getattr(info, "trade_freeze_level", 0) or 0)
+    required_points = max(stops_level, freeze_level)
+    required_distance = required_points * point
+
+    if required_distance > 0:
+        tolerance = point * 0.1
+        if sl_distance + tolerance < required_distance:
+            raise RuntimeError(
+                f"Stop loss too close for {symbol}: distance={sl_distance:.{digits}f}, "
+                f"broker minimum={required_distance:.{digits}f} ({required_points} points)."
+            )
+        if tp_distance + tolerance < required_distance:
+            raise RuntimeError(
+                f"Take profit too close for {symbol}: distance={tp_distance:.{digits}f}, "
+                f"broker minimum={required_distance:.{digits}f} ({required_points} points)."
+            )
+
+    return entry, sl, tp
+
+
 def market_order(symbol: str, direction: str, volume: float, sl: float, tp: float, deviation: int = 50):
     if not account_is_demo():
         raise RuntimeError("V1 safety lock: live/real MT5 accounts are blocked.")
@@ -39,15 +88,13 @@ def market_order(symbol: str, direction: str, volume: float, sl: float, tp: floa
 
     direction = direction.upper()
     if direction == "BUY":
-        order_type, price = mt5.ORDER_TYPE_BUY, tick.ask
-        if not sl < price < tp:
-            raise RuntimeError("Invalid BUY levels: require SL < entry < TP.")
+        order_type, price = mt5.ORDER_TYPE_BUY, float(tick.ask)
     elif direction == "SELL":
-        order_type, price = mt5.ORDER_TYPE_SELL, tick.bid
-        if not tp < price < sl:
-            raise RuntimeError("Invalid SELL levels: require TP < entry < SL.")
+        order_type, price = mt5.ORDER_TYPE_SELL, float(tick.bid)
     else:
         raise ValueError("direction must be BUY or SELL")
+
+    price, sl, tp = validate_trade_levels(symbol, direction, price, sl, tp)
 
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
