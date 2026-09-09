@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 
+from backtesting.outcomes import outcome_summary
 from features.v2_features import build_causal_v2_features
 
 
@@ -11,10 +12,6 @@ from features.v2_features import build_causal_v2_features
 class BenchmarkRule:
     name: str
     description: str
-
-
-def _expectancy(hit_rate: float, target_r: float) -> float:
-    return float(hit_rate * target_r - (1.0 - hit_rate))
 
 
 def _split(df: pd.DataFrame) -> pd.DataFrame:
@@ -46,15 +43,19 @@ def _rule_masks(df: pd.DataFrame) -> dict[BenchmarkRule, pd.Series]:
 
 
 def build_deterministic_benchmark(dataset: pd.DataFrame, min_split_samples: int = 8) -> pd.DataFrame:
+    """Evaluate transparent CRT rules with explicit timeout accounting.
+
+    Expectancy uses +target R for target hits, -1R for stop hits, and 0R for
+    observations where neither target nor stop was reached inside the research
+    horizon. This prevents unresolved observations from being silently treated
+    as full losses.
+    """
     df = _split(build_causal_v2_features(dataset))
     rows: list[dict] = []
 
     for rule, mask in _rule_masks(df).items():
         subset = df.loc[mask.fillna(False)].copy()
-        for target_name, target_col, target_r in [
-            ("1R", "hit_1_0r", 1.0),
-            ("1.5R", "hit_1_5r", 1.5),
-        ]:
+        for target_name, target_r in [("1R", 1.0), ("1.5R", 1.5)]:
             row: dict[str, object] = {
                 "rule": rule.name,
                 "description": rule.description,
@@ -64,13 +65,18 @@ def build_deterministic_benchmark(dataset: pd.DataFrame, min_split_samples: int 
             stable = True
             for split in ["TRAIN", "VALIDATION", "TEST"]:
                 part = subset[subset["split"] == split]
-                n = len(part)
-                hit = float(part[target_col].mean()) if n else float("nan")
                 prefix = split.lower()
-                row[f"{prefix}_samples"] = int(n)
-                row[f"{prefix}_hit_rate"] = hit
-                row[f"{prefix}_expectancy"] = _expectancy(hit, target_r) if n else float("nan")
-                if n < min_split_samples:
+                stats = outcome_summary(part, target_r=target_r, timeout_r=0.0) if len(part) else {
+                    "samples": 0, "wins": 0, "stops": 0, "timeouts": 0,
+                    "resolved_rate": float("nan"), "hit_rate_all": float("nan"),
+                    "expectancy_r_timeout_neutral": float("nan"),
+                }
+                row[f"{prefix}_samples"] = stats["samples"]
+                row[f"{prefix}_hit_rate"] = stats["hit_rate_all"]
+                row[f"{prefix}_resolved_rate"] = stats["resolved_rate"]
+                row[f"{prefix}_timeouts"] = stats["timeouts"]
+                row[f"{prefix}_expectancy"] = stats["expectancy_r_timeout_neutral"]
+                if stats["samples"] < min_split_samples:
                     stable = False
             row["sample_stable"] = stable
             rows.append(row)
