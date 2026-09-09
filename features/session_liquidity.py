@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import timedelta
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -9,6 +10,7 @@ import pandas as pd
 from backtesting.killzones import DEFAULT_KILLZONES, Killzone
 
 NY = ZoneInfo("America/New_York")
+DAY = timedelta(days=1)
 
 SESSION_LIQUIDITY_NUMERIC_FEATURES = [
     "asia_prev_high_dist_atr",
@@ -46,7 +48,8 @@ def _session_local_dates(times_ny: pd.Series, kz: Killzone) -> pd.Series:
         # Wrapped session, e.g. Asia 20:00-00:00. Bars after midnight belong
         # to the prior session date.
         after_midnight = times_ny.dt.hour < kz.end_hour
-        dates = dates.where(~after_midnight, (times_ny - pd.Timedelta(days=1)).dt.date)
+        previous_dates = (times_ny - DAY).dt.date
+        dates = dates.where(~after_midnight, previous_dates)
     return dates
 
 
@@ -78,9 +81,9 @@ def _completed_session_range(
         if rows.empty:
             continue
 
-        local_start = pd.Timestamp(session_date, tz=NY) + pd.Timedelta(hours=kz.start_hour)
-        end_date = session_date if kz.start_hour < kz.end_hour else (pd.Timestamp(session_date) + pd.Timedelta(days=1)).date()
-        local_end = pd.Timestamp(end_date, tz=NY) + pd.Timedelta(hours=kz.end_hour)
+        local_start = pd.Timestamp(session_date, tz=NY) + timedelta(hours=int(kz.start_hour))
+        end_date = session_date if kz.start_hour < kz.end_hour else session_date + DAY
+        local_end = pd.Timestamp(end_date, tz=NY) + timedelta(hours=int(kz.end_hour))
 
         # Only sessions fully completed before the decision timestamp are valid.
         if local_end > decision_ny:
