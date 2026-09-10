@@ -39,6 +39,10 @@ def run(args) -> None:
     )
     state_path = Path(args.state)
     state = load_state(state_path)
+    # Persist cohort start before any MT5/sizing work so a crash cannot reset
+    # the prospective boundary on the next launch.
+    save_state(state_path, state)
+
     settings = connect()
     try:
         symbol = resolve_symbol(settings.symbol)
@@ -54,6 +58,10 @@ def run(args) -> None:
 
         while True:
             tick = latest_tick(symbol)
+            account = mt5.account_info()
+            if account is None:
+                raise RuntimeError(f"Unable to refresh account: {mt5.last_error()}")
+
             m5_tail = get_rates(symbol, "M5", 10, completed_only=True, asof=tick["time"])
             latest_completed_m5 = pd.Timestamp(m5_tail.iloc[-1]["time"]).isoformat()
 
@@ -72,6 +80,7 @@ def run(args) -> None:
                         f"entry={sig['entry']:.3f} stop={sig['stop']:.3f} "
                         f"tp1={sig['tp1']:.3f} tp2={sig['tp2']:.3f}"
                     )
+                    save_state(state_path, state)
                 state["last_completed_m5"] = latest_completed_m5
 
             for sig in state["signals"].values():
@@ -79,15 +88,30 @@ def run(args) -> None:
                 volume_info = None
                 if _crosses_limit(sig, tick):
                     direction = "BUY" if sig["direction"] == "BULLISH" else "SELL"
-                    volume_info = calculate_mt5_volume(
-                        symbol=symbol,
-                        direction=direction,
-                        account_equity=float(account.equity),
-                        risk_fraction=cfg.risk_fraction,
-                        entry=float(sig["entry"]),
-                        stop=float(sig["stop"]),
-                    )
-                update_signal_with_tick(sig, tick, float(account.equity), volume_info)
+                    try:
+                        volume_info = calculate_mt5_volume(
+                            symbol=symbol,
+                            direction=direction,
+                            account_equity=float(account.equity),
+                            risk_fraction=cfg.risk_fraction,
+                            entry=float(sig["entry"]),
+                            stop=float(sig["stop"]),
+                        )
+                        sig["sizing_error"] = None
+                    except Exception as exc:
+                        # Sizing is observational in shadow mode. Do not lose a
+                        # genuine forward fill because a broker calculator field
+                        # is temporarily unavailable.
+                        sig["sizing_error"] = str(exc)
+                        print(f"SHADOW SIZING WARNING {sig['signal_id']}: {exc}")
+
+                update_signal_with_tick(
+                    sig,
+                    tick,
+                    float(account.equity),
+                    volume_info,
+                    risk_fraction=cfg.risk_fraction,
+                )
                 if sig.get("status") != old_status:
                     print(f"{sig['signal_id']} : {old_status} -> {sig['status']}")
 
@@ -118,7 +142,7 @@ def run(args) -> None:
 if __name__ == "__main__":
     p = argparse.ArgumentParser(description="V5.0 frozen OTE 0.79 prospective MT5 shadow trader")
     p.add_argument("--target-fills", type=int, default=40, choices=range(30, 51))
-    p.add_argument("--risk", type=float, default=0.0025)
+    p.add_argument("--risk", type=float, default=0.01)
     p.add_argument("--poll-seconds", type=int, default=5)
     p.add_argument("--state", default="data/shadow/v5_shadow_state.json")
     p.add_argument("--output-dir", default="data/shadow/v5")
