@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import timedelta
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -9,7 +10,7 @@ import pandas as pd
 from backtesting.killzones import DEFAULT_KILLZONES, Killzone
 
 NY = ZoneInfo("America/New_York")
-H1 = pd.Timedelta(hours=1)
+H1 = pd.Timedelta(timedelta(hours=1))
 
 
 @dataclass(frozen=True)
@@ -88,7 +89,7 @@ def _normalize_h1(df: pd.DataFrame) -> pd.DataFrame:
 def _session_date_for_bar(ny_time: pd.Timestamp, kz: Killzone):
     date = ny_time.date()
     if kz.start_hour > kz.end_hour and ny_time.hour < kz.end_hour:
-        return (ny_time - pd.Timedelta(days=1)).date()
+        return (ny_time - pd.Timedelta(timedelta(days=1))).date()
     return date
 
 
