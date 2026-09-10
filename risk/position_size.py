@@ -40,6 +40,18 @@ def calculate_volume(
     return min(volume_max, stepped)
 
 
+def _symbol_loss_per_lot(info, entry: float, stop: float) -> float:
+    """Fallback stop-loss estimate from the broker symbol contract fields."""
+    tick_size = float(getattr(info, "trade_tick_size", 0.0) or 0.0)
+    tick_value_loss = float(getattr(info, "trade_tick_value_loss", 0.0) or 0.0)
+    tick_value = float(getattr(info, "trade_tick_value", 0.0) or 0.0)
+    value = tick_value_loss if tick_value_loss > 0 else tick_value
+    distance = abs(float(entry) - float(stop))
+    if distance <= 0 or tick_size <= 0 or value <= 0:
+        return 0.0
+    return float((distance / tick_size) * value)
+
+
 def calculate_mt5_volume(
     symbol: str,
     direction: str,
@@ -48,10 +60,15 @@ def calculate_mt5_volume(
     entry: float,
     stop: float,
 ) -> tuple[float, float, float]:
-    """Size a position using MT5's own P/L calculator in account currency.
+    """Size a position using MT5's P/L calculator with a contract-spec fallback.
 
     Returns (volume, risk_budget, estimated_loss_at_stop). A zero volume means
     the broker minimum lot would exceed the configured risk budget.
+
+    Some broker GOLD symbols can return zero from ``order_calc_profit`` for a
+    hypothetical stop calculation. When that happens this function falls back
+    to ``trade_tick_size`` and ``trade_tick_value_loss``/``trade_tick_value``.
+    This function never sends an order.
     """
     if not 0 < risk_fraction < 1:
         raise ValueError("risk_fraction must be between 0 and 1")
@@ -78,26 +95,22 @@ def calculate_mt5_volume(
     if min_volume <= 0 or max_volume <= 0 or step <= 0:
         raise RuntimeError(f"Invalid broker volume specification for {symbol}.")
 
-    loss_for_one_lot = mt5.order_calc_profit(order_type, symbol, 1.0, float(entry), float(stop))
-    if loss_for_one_lot is None:
-        raise RuntimeError(f"order_calc_profit failed: {mt5.last_error()}")
-
-    loss_per_lot = abs(float(loss_for_one_lot))
+    mt5_loss = mt5.order_calc_profit(order_type, symbol, 1.0, float(entry), float(stop))
+    loss_per_lot = abs(float(mt5_loss)) if mt5_loss is not None else 0.0
     if loss_per_lot <= 0:
-        raise RuntimeError("MT5 returned a zero loss estimate for the stop distance.")
+        loss_per_lot = _symbol_loss_per_lot(info, entry, stop)
+    if loss_per_lot <= 0:
+        raise RuntimeError(
+            "Unable to estimate stop loss from MT5 or symbol contract fields; shadow sizing unavailable."
+        )
 
     risk_budget = float(account_equity) * float(risk_fraction)
     raw_volume = risk_budget / loss_per_lot
     if raw_volume < min_volume:
-        min_lot_loss = abs(
-            float(mt5.order_calc_profit(order_type, symbol, min_volume, float(entry), float(stop)) or 0.0)
-        )
-        return 0.0, risk_budget, min_lot_loss
+        return 0.0, risk_budget, float(loss_per_lot * min_volume)
 
     volume = min(max_volume, _floor_to_step(raw_volume, step))
-    estimated_loss = abs(
-        float(mt5.order_calc_profit(order_type, symbol, volume, float(entry), float(stop)) or 0.0)
-    )
+    estimated_loss = float(loss_per_lot * volume)
 
     if estimated_loss > risk_budget * 1.001:
         raise RuntimeError(
