@@ -26,7 +26,7 @@ def _normalize(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _bar_close_time(open_time: pd.Timestamp, minutes: int) -> pd.Timestamp:
-    return pd.Timestamp(open_time) + pd.Timedelta(minutes=minutes)
+    return pd.Timestamp(open_time) + pd.to_timedelta(int(minutes), unit="min")
 
 
 def _valid_entry(direction: str, entry: float, stop: float) -> bool:
@@ -173,7 +173,7 @@ def build_causal_setups(
         m15_conf = _find_mss_fvg(
             m15b,
             signal_close,
-            signal_close + pd.Timedelta(hours=conf_cfg.m15_window_hours),
+            signal_close + pd.to_timedelta(int(conf_cfg.m15_window_hours), unit="h"),
             direction,
             15,
             conf_cfg.structure_lookback,
@@ -196,7 +196,7 @@ def build_causal_setups(
                 m5_conf = _find_mss_fvg(
                     m5b,
                     pd.Timestamp(m15_conf["fvg_time"]),
-                    pd.Timestamp(m15_conf["fvg_time"]) + pd.Timedelta(hours=conf_cfg.m5_window_hours),
+                    pd.Timestamp(m15_conf["fvg_time"]) + pd.to_timedelta(int(conf_cfg.m5_window_hours), unit="h"),
                     direction,
                     5,
                     conf_cfg.structure_lookback,
@@ -244,7 +244,8 @@ def _metrics(scope: str, variant: str, df: pd.DataFrame) -> dict:
     wins = float(df.loc[df["total_r"] > 0, "total_r"].sum())
     losses = float(-df.loc[df["total_r"] < 0, "total_r"].sum())
     eq = df.sort_values("signal_close_time_utc")["total_r"].cumsum()
-    dd = eq - eq.cummax()
+    peak = pd.concat([pd.Series([0.0]), eq.reset_index(drop=True)]).cummax().iloc[1:].reset_index(drop=True)
+    dd = eq.reset_index(drop=True) - peak
     return {
         "scope": scope,
         "variant": variant,
