@@ -10,9 +10,9 @@ def _sample():
     for year in [2024, 2025, 2026]:
         for hour in [8, 9]:
             for i in range(60):
-                ts = pd.Timestamp(f"{year}-03-01T00:00:00Z") + pd.Timedelta(hours=i)
+                ts = pd.Timestamp(f"{year}-03-01T00:00:00Z") + pd.to_timedelta(int(i), unit="h")
                 if year == 2026 and i >= 30:
-                    ts = pd.Timestamp("2026-08-01T00:00:00Z") + pd.Timedelta(hours=i)
+                    ts = pd.Timestamp("2026-08-01T00:00:00Z") + pd.to_timedelta(int(i), unit="h")
                 win = hour == 8
                 r = 1.5 if win else -1.0
                 rows.append({
@@ -27,9 +27,9 @@ def _sample():
                     "m5exec_total_r": r,
                     "m5exec_tp1_hit": win,
                     "m5exec_tp2_hit": win,
-                    "m15_mss_time": ts + pd.Timedelta(minutes=15),
-                    "m15_fvg_time": ts + pd.Timedelta(minutes=30),
-                    "m5_fvg_time": ts + pd.Timedelta(minutes=40),
+                    "m15_mss_time": ts + pd.to_timedelta(15, unit="min"),
+                    "m15_fvg_time": ts + pd.to_timedelta(30, unit="min"),
+                    "m5_fvg_time": ts + pd.to_timedelta(40, unit="min"),
                     "m15_fvg_entry": 100.5,
                     "m5_fvg_entry": 100.25,
                 })
