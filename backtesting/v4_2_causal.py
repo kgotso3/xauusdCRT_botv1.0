@@ -44,6 +44,21 @@ def _empty_confirmation() -> dict:
     }
 
 
+def _ensure_normalized_for_scan(bars: pd.DataFrame) -> pd.DataFrame:
+    """Avoid re-normalizing already-normalized full-history frames on every signal."""
+    if bars.empty:
+        return bars
+    times = bars["time"]
+    if (
+        isinstance(times.dtype, pd.DatetimeTZDtype)
+        and str(times.dt.tz) == "UTC"
+        and times.is_monotonic_increasing
+        and not times.isna().any()
+    ):
+        return bars.reset_index(drop=True) if not isinstance(bars.index, pd.RangeIndex) else bars
+    return _normalize(bars)
+
+
 def _find_mss_fvg(
     bars: pd.DataFrame,
     start_time: pd.Timestamp,
@@ -52,37 +67,35 @@ def _find_mss_fvg(
     timeframe_minutes: int,
     lookback: int,
 ) -> dict:
-    """Find a causal MSS and then a direction-aligned FVG.
+    """Find a causal MSS and then a direction-aligned FVG efficiently.
 
-    MT5 timestamps represent bar OPEN times.  A confirmation bar is eligible only
+    MT5 timestamps represent bar OPEN times. A confirmation bar is eligible only
     after its close, and that close must fall inside [start_time, end_time].
-    Crucially, the MSS structure lookback may use bars that closed BEFORE
-    start_time.  Those bars are already-known context, not future information.
-    This fixes the old implementation which sliced them away.
+    The MSS structure lookback may use completed bars before start_time. Only the
+    small confirmation window is scanned; the full history is not copied or
+    re-normalized for every H1 candidate.
     """
     if lookback <= 0:
         raise ValueError("lookback must be positive")
 
-    data = _normalize(bars)
-    if data.empty:
-        return _empty_confirmation()
-
-    data = data.loc[data["time"] < end_time].copy().reset_index(drop=True)
+    data = _ensure_normalized_for_scan(bars)
     if len(data) < max(lookback + 1, 3):
         return _empty_confirmation()
 
-    close_times = data["time"] + pd.to_timedelta(int(timeframe_minutes), unit="min")
+    delta = pd.to_timedelta(int(timeframe_minutes), unit="min")
+    close_times = data["time"] + delta
+
+    first_eligible = int(close_times.searchsorted(pd.Timestamp(start_time), side="left"))
+    stop_exclusive = int(close_times.searchsorted(pd.Timestamp(end_time), side="right"))
+    start_idx = max(lookback, first_eligible)
+    if start_idx >= stop_exclusive:
+        return _empty_confirmation()
+
     mss_idx = None
     mss_time = pd.NaT
     mss_entry = np.nan
 
-    for i in range(lookback, len(data)):
-        cur_close_time = pd.Timestamp(close_times.iloc[i])
-        if cur_close_time < start_time:
-            continue
-        if cur_close_time > end_time:
-            break
-
+    for i in range(start_idx, stop_exclusive):
         cur = data.iloc[i]
         prior = data.iloc[i - lookback:i]
         close = float(cur["close"])
@@ -93,7 +106,7 @@ def _find_mss_fvg(
             shifted = close < float(prior["low"].min()) and close < open_
         if shifted:
             mss_idx = i
-            mss_time = cur_close_time
+            mss_time = pd.Timestamp(close_times.iloc[i])
             mss_entry = close
             break
 
@@ -102,13 +115,7 @@ def _find_mss_fvg(
 
     fvg_time = pd.NaT
     fvg_entry = np.nan
-    for i in range(max(2, mss_idx), len(data)):
-        cur_close_time = pd.Timestamp(close_times.iloc[i])
-        if cur_close_time < mss_time:
-            continue
-        if cur_close_time > end_time:
-            break
-
+    for i in range(max(2, mss_idx), stop_exclusive):
         first = data.iloc[i - 2]
         cur = data.iloc[i]
         if direction == "BULLISH":
@@ -116,7 +123,7 @@ def _find_mss_fvg(
         else:
             imbalance = float(cur["high"]) < float(first["low"])
         if imbalance:
-            fvg_time = cur_close_time
+            fvg_time = pd.Timestamp(close_times.iloc[i])
             fvg_entry = float(cur["close"])
             break
 
@@ -140,9 +147,14 @@ def _simulate_from_timestamp(
 ) -> dict | None:
     if not _valid_entry(direction, entry, stop):
         return None
-    future = bars.loc[bars["time"] >= entry_time].copy()
-    if future.empty:
+    data = _ensure_normalized_for_scan(bars)
+    if data.empty:
         return None
+    start_idx = int(data["time"].searchsorted(pd.Timestamp(entry_time), side="left"))
+    if start_idx >= len(data):
+        return None
+    end_idx = min(len(data), start_idx + int(split_cfg.max_holding_bars))
+    future = data.iloc[start_idx:end_idx]
     return simulate_split_trade(future, direction, entry, stop, split_cfg)
 
 
