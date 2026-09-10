@@ -58,7 +58,7 @@ def _utc_day_start() -> datetime:
     return now.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
-def _closed_setup_r_today() -> list[float]:
+def _closed_setup_pnl_today() -> list[float]:
     deals = mt5.history_deals_get(_utc_day_start(), datetime.now(timezone.utc)) or ()
     ours = [d for d in deals if int(getattr(d, "magic", 0)) == MAGIC_V51 and int(getattr(d, "entry", -1)) == getattr(mt5, "DEAL_ENTRY_OUT", 1)]
     by_position: dict[int, float] = {}
@@ -66,21 +66,22 @@ def _closed_setup_r_today() -> list[float]:
         pid = int(getattr(d, "position_id", 0))
         pnl = float(getattr(d, "profit", 0.0)) + float(getattr(d, "commission", 0.0)) + float(getattr(d, "swap", 0.0)) + float(getattr(d, "fee", 0.0))
         by_position[pid] = by_position.get(pid, 0.0) + pnl
-    # Risk-normalized R is journaled by the runner. Broker history alone cannot
-    # reconstruct intended setup risk reliably, so this function returns signs
-    # for the consecutive-loss guard and the runner maintains exact daily R.
     return [v for _, v in sorted(by_position.items())]
 
 
 def hard_risk_gate(symbol: str, journal_daily_r: float, cfg: DemoRiskConfig) -> None:
     account_is_demo_only()
     pos, pend = _existing_v51_exposure(symbol)
-    if pos + pend >= cfg.max_open_setups * 2:
+    # V5.1 uses two broker legs per setup.  With max_open_setups=1, any
+    # existing V5.1 position/order means a second setup is forbidden.
+    if cfg.max_open_setups == 1 and (pos > 0 or pend > 0):
+        raise RuntimeError("V5.1 duplicate/risk gate: an existing V5.1 GOLD position or pending order already exists.")
+    if cfg.max_open_setups > 1 and pos + pend >= cfg.max_open_setups * 2:
         raise RuntimeError("V5.1 risk gate: maximum open/pending setup exposure reached.")
     if journal_daily_r <= -abs(cfg.daily_loss_limit_r):
         raise RuntimeError("V5.1 risk gate: daily loss limit reached.")
 
-    pnl = _closed_setup_r_today()
+    pnl = _closed_setup_pnl_today()
     streak = 0
     for x in reversed(pnl):
         if x < 0:
@@ -137,7 +138,7 @@ def build_limit_requests(symbol: str, signal: dict, cfg: DemoRiskConfig) -> tupl
         stop=stop,
     )
     if total_volume <= 0:
-        raise RuntimeError("V5.1 risk gate: broker minimum volume exceeds the 1% setup risk budget.")
+        raise RuntimeError("V5.1 risk gate: broker minimum volume exceeds the configured setup risk budget.")
 
     v1, v2 = _split_volume(total_volume, info)
     order_type = mt5.ORDER_TYPE_BUY_LIMIT if direction == "BUY" else mt5.ORDER_TYPE_SELL_LIMIT
