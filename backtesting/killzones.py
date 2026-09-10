@@ -26,14 +26,16 @@ class Killzone:
         return True
 
 
-# V2 research defaults. These are deliberately configuration constants rather
-# than hard-coded strategy rules so they can be changed and revalidated later.
-# All times are America/New_York local time and therefore DST-aware when the
-# research dataset's ny_hour is generated from timezone-aware UTC timestamps.
+# Session-anchored CRT research defaults. All times are expressed in
+# America/New_York local clock time, so UTC conversion stays DST-aware.
+#
+# The New York window is intentionally extended through 14:00 NY time for the
+# H1 CRT model. With [start, end) semantics, NEW_YORK includes H1 candles that
+# open at 08:00, 09:00, 10:00, 11:00, 12:00, and 13:00 NY time.
 DEFAULT_KILLZONES: tuple[Killzone, ...] = (
     Killzone("ASIA", 20, 0),       # 20:00-00:00 New York time
     Killzone("LONDON", 2, 5),     # 02:00-05:00 New York time
-    Killzone("NEW_YORK", 8, 11),  # 08:00-11:00 New York time
+    Killzone("NEW_YORK", 8, 14),  # 08:00-14:00 New York time
 )
 
 
