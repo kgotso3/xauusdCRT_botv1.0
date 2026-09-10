@@ -21,10 +21,11 @@ def test_new_york_killzone_runs_to_14_ny_exclusive():
 
 def test_bullish_session_crt_range_sweep_reclaim_and_expansion_ready():
     # January is EST: 13:00 UTC == 08:00 NY.
+    # Entry 101, stop 97, target 110 => 9 / 4 = 2.25R.
     df = _bars([
         ["2026-01-12T13:00:00Z", 100.0, 110.0, 100.0, 106.0],  # 08:00 range
-        ["2026-01-12T14:00:00Z", 106.0, 107.0, 97.0, 102.0],   # 09:00 sweep low + reclaim
-        ["2026-01-12T15:00:00Z", 102.0, 109.0, 101.0, 108.0],
+        ["2026-01-12T14:00:00Z", 106.0, 107.0, 97.0, 101.0],   # 09:00 sweep low + reclaim
+        ["2026-01-12T15:00:00Z", 101.0, 109.0, 100.5, 108.0],
     ])
     signal = detect_session_crt(df, "NEW_YORK", "2026-01-12", SessionCRTConfig(min_rr=2.0))
     assert signal["direction"] == "BULLISH"
@@ -38,9 +39,10 @@ def test_bullish_session_crt_range_sweep_reclaim_and_expansion_ready():
 
 
 def test_bearish_session_crt_range_sweep_reclaim_and_expansion_ready():
+    # Entry 109, stop 113, target 100 => 9 / 4 = 2.25R.
     df = _bars([
         ["2026-01-12T13:00:00Z", 100.0, 110.0, 100.0, 104.0],
-        ["2026-01-12T14:00:00Z", 104.0, 113.0, 103.0, 108.0],
+        ["2026-01-12T14:00:00Z", 104.0, 113.0, 103.0, 109.0],
     ])
     signal = detect_session_crt(df, "NEW_YORK", "2026-01-12", SessionCRTConfig(min_rr=2.0))
     assert signal["direction"] == "BEARISH"
@@ -48,6 +50,7 @@ def test_bearish_session_crt_range_sweep_reclaim_and_expansion_ready():
     assert signal["swept_high"] is True
     assert signal["target"] == 100.0
     assert signal["stop"] == 113.0
+    assert signal["rr_to_opposite_range"] >= 2.0
     assert signal["valid"] is True
 
 
