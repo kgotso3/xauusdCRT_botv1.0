@@ -16,3 +16,4 @@ data/*.parquet
 data/backtests/
 data/research/
 data/models/
+data/shadow/
