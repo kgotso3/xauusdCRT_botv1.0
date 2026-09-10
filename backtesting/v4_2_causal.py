@@ -33,6 +33,17 @@ def _valid_entry(direction: str, entry: float, stop: float) -> bool:
     return entry > stop if direction == "BULLISH" else entry < stop
 
 
+def _empty_confirmation() -> dict:
+    return {
+        "mss": False,
+        "mss_time": pd.NaT,
+        "mss_entry": np.nan,
+        "fvg": False,
+        "fvg_time": pd.NaT,
+        "fvg_entry": np.nan,
+    }
+
+
 def _find_mss_fvg(
     bars: pd.DataFrame,
     start_time: pd.Timestamp,
@@ -41,23 +52,37 @@ def _find_mss_fvg(
     timeframe_minutes: int,
     lookback: int,
 ) -> dict:
-    """Find causal MSS then first direction-aligned FVG at/after MSS.
+    """Find a causal MSS and then a direction-aligned FVG.
 
-    A bar is only usable after its close timestamp. MSS is a directional close
-    through the extreme of the preceding ``lookback`` completed bars. FVG is a
-    standard three-candle imbalance and must form on or after the MSS bar.
+    MT5 timestamps represent bar OPEN times.  A confirmation bar is eligible only
+    after its close, and that close must fall inside [start_time, end_time].
+    Crucially, the MSS structure lookback may use bars that closed BEFORE
+    start_time.  Those bars are already-known context, not future information.
+    This fixes the old implementation which sliced them away.
     """
-    data = bars.loc[(bars["time"] >= start_time) & (bars["time"] < end_time)].copy().reset_index(drop=True)
-    if len(data) < max(lookback + 1, 3):
-        return {"mss": False, "mss_time": pd.NaT, "mss_entry": np.nan, "fvg": False, "fvg_time": pd.NaT, "fvg_entry": np.nan}
+    if lookback <= 0:
+        raise ValueError("lookback must be positive")
 
+    data = _normalize(bars)
+    if data.empty:
+        return _empty_confirmation()
+
+    data = data.loc[data["time"] < end_time].copy().reset_index(drop=True)
+    if len(data) < max(lookback + 1, 3):
+        return _empty_confirmation()
+
+    close_times = data["time"] + pd.to_timedelta(int(timeframe_minutes), unit="min")
     mss_idx = None
     mss_time = pd.NaT
     mss_entry = np.nan
-    fvg_time = pd.NaT
-    fvg_entry = np.nan
 
     for i in range(lookback, len(data)):
+        cur_close_time = pd.Timestamp(close_times.iloc[i])
+        if cur_close_time < start_time:
+            continue
+        if cur_close_time > end_time:
+            break
+
         cur = data.iloc[i]
         prior = data.iloc[i - lookback:i]
         close = float(cur["close"])
@@ -68,14 +93,22 @@ def _find_mss_fvg(
             shifted = close < float(prior["low"].min()) and close < open_
         if shifted:
             mss_idx = i
-            mss_time = _bar_close_time(pd.Timestamp(cur["time"]), timeframe_minutes)
+            mss_time = cur_close_time
             mss_entry = close
             break
 
     if mss_idx is None:
-        return {"mss": False, "mss_time": pd.NaT, "mss_entry": np.nan, "fvg": False, "fvg_time": pd.NaT, "fvg_entry": np.nan}
+        return _empty_confirmation()
 
+    fvg_time = pd.NaT
+    fvg_entry = np.nan
     for i in range(max(2, mss_idx), len(data)):
+        cur_close_time = pd.Timestamp(close_times.iloc[i])
+        if cur_close_time < mss_time:
+            continue
+        if cur_close_time > end_time:
+            break
+
         first = data.iloc[i - 2]
         cur = data.iloc[i]
         if direction == "BULLISH":
@@ -83,7 +116,7 @@ def _find_mss_fvg(
         else:
             imbalance = float(cur["high"]) < float(first["low"])
         if imbalance:
-            fvg_time = _bar_close_time(pd.Timestamp(cur["time"]), timeframe_minutes)
+            fvg_time = cur_close_time
             fvg_entry = float(cur["close"])
             break
 
@@ -226,9 +259,7 @@ def _variant_frame(trades: pd.DataFrame, variant: str) -> pd.DataFrame:
     if col not in trades.columns:
         return trades.iloc[0:0].copy()
     out = trades.loc[trades[col].notna()].copy()
-    if variant == "FULL_MODEL_CAUSAL":
-        out = out.loc[out["correct_half"]]
-    if variant == "FULL_M5_CAUSAL":
+    if variant in {"FULL_MODEL_CAUSAL", "FULL_M5_CAUSAL"}:
         out = out.loc[out["correct_half"]]
     out = out.rename(columns={
         prefix + "total_r": "total_r",
