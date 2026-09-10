@@ -29,7 +29,7 @@ class ShadowConfig:
     target_closed_fills: int = 40
     retest_window_minutes: int = 120
     holding_window_hours: int = 24
-    risk_fraction: float = 0.0025
+    risk_fraction: float = 0.01
     history_h1: int = 400
     history_m15: int = 1200
     history_m5: int = 3000
@@ -83,7 +83,9 @@ def _candidate_from_latest_causal(h1: pd.DataFrame, m15: pd.DataFrame, m5: pd.Da
     setups = build_causal_setups(h1, m15, m5)
     if setups.empty or "m5_fvg" not in setups.columns:
         return None
-    x = setups.loc[setups["correct_half"].fillna(False) & setups["m5_fvg"].fillna(False)].copy()
+    correct_half = setups["correct_half"].astype("boolean").fillna(False)
+    m5_fvg = setups["m5_fvg"].astype("boolean").fillna(False)
+    x = setups.loc[correct_half & m5_fvg].copy()
     if x.empty:
         return None
     x["m5_fvg_time"] = pd.to_datetime(x["m5_fvg_time"], utc=True, errors="coerce")
@@ -152,6 +154,7 @@ def add_new_candidate(state: dict, symbol: str, candidate: dict | None, observed
         "volume": None,
         "risk_budget": None,
         "estimated_stop_loss": None,
+        "sizing_error": None,
     }
     return key
 
@@ -162,7 +165,13 @@ def _close(sig: dict, when: Any, status: str, gross_r: float) -> None:
     sig["gross_r"] = float(gross_r)
 
 
-def update_signal_with_tick(sig: dict, tick: dict, account_equity: float | None = None, volume_info: tuple | None = None) -> None:
+def update_signal_with_tick(
+    sig: dict,
+    tick: dict,
+    account_equity: float | None = None,
+    volume_info: tuple | None = None,
+    risk_fraction: float = 0.01,
+) -> None:
     if sig["status"] in {"CLOSED_STOP", "CLOSED_TP2", "CLOSED_TIMEOUT", "CANCELLED_STOP_BEFORE_FILL", "CANCELLED_NO_RETEST"}:
         return
     now = _ts(tick["time"])
@@ -196,7 +205,7 @@ def update_signal_with_tick(sig: dict, tick: dict, account_equity: float | None 
             if volume_info is not None:
                 sig["volume"], sig["risk_budget"], sig["estimated_stop_loss"] = map(float, volume_info)
             elif account_equity is not None:
-                sig["risk_budget"] = float(account_equity) * 0.0025
+                sig["risk_budget"] = float(account_equity) * float(risk_fraction)
         return
 
     if sig["status"] in {"FILLED", "TP1_HIT"}:
