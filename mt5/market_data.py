@@ -25,7 +25,7 @@ def _norm_symbol(name: str) -> str:
 
 
 def resolve_symbol(preferred: str) -> str:
-    """Resolve a logical gold symbol to the broker's actual MT5 symbol name."""
+    """Resolve a logical instrument name to the broker's actual MT5 symbol name."""
     preferred = preferred.strip()
     info = mt5.symbol_info(preferred)
     if info is not None:
@@ -39,6 +39,8 @@ def resolve_symbol(preferred: str) -> str:
 
     target = _norm_symbol(preferred)
     gold_alias = target in {"XAUUSD", "GOLD"}
+    nasdaq_aliases = {"NASDAQ", "NASDAQ100", "NAS100", "USTEC", "US100", "US100CASH"}
+    nasdaq_alias = target in nasdaq_aliases
     candidates: list[tuple[int, str]] = []
 
     for symbol in symbols:
@@ -54,6 +56,10 @@ def resolve_symbol(preferred: str) -> str:
             score = 2
         elif gold_alias and norm.startswith("GOLD") and not norm.startswith("GOLDMAN"):
             score = 3
+        elif nasdaq_alias and norm in {"US100CASH", "US100", "NAS100", "USTEC", "NASDAQ100"}:
+            score = 1
+        elif nasdaq_alias and any(norm.startswith(alias) for alias in ("US100CASH", "US100", "NAS100", "USTEC", "NASDAQ100")):
+            score = 2
         elif norm.startswith(target):
             score = 4
 
