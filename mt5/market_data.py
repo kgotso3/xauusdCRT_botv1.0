@@ -140,13 +140,24 @@ def latest_tick(symbol: str) -> dict:
     info = mt5.symbol_info(symbol)
     if tick is None or info is None:
         raise RuntimeError(f"No tick available for {symbol}: {mt5.last_error()}")
+
+    tick_time = int(getattr(tick, "time", 0) or 0)
+    bid = float(getattr(tick, "bid", 0.0) or 0.0)
+    ask = float(getattr(tick, "ask", 0.0) or 0.0)
+    if tick_time <= 0 or bid <= 0 or ask <= 0:
+        session_note = "market may be closed or this broker symbol may not currently have a live quote"
+        raise RuntimeError(
+            f"No valid live tick for {symbol}: time={tick_time}, bid={bid}, ask={ask}. "
+            f"{session_note}. Trading/shadow evaluation is blocked until a valid quote is available."
+        )
+
     point = float(info.point or 0.0)
-    spread_price = float(tick.ask - tick.bid)
+    spread_price = float(ask - bid)
     spread_points = spread_price / point if point > 0 else 0.0
     return {
-        "time": datetime.fromtimestamp(tick.time, tz=timezone.utc),
-        "bid": float(tick.bid),
-        "ask": float(tick.ask),
+        "time": datetime.fromtimestamp(tick_time, tz=timezone.utc),
+        "bid": bid,
+        "ask": ask,
         "spread": spread_price,
         "spread_points": float(spread_points),
     }
