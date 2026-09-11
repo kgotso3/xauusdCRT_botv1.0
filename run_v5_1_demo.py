@@ -23,7 +23,7 @@ from shadow.v5_engine import _candidate_from_latest_causal
 def _load_state(path: Path) -> dict:
     if not path.exists():
         return {
-            "version": "V5.1",
+            "version": "V5.1-NASDAQ",
             "last_completed_m5": None,
             "signals": {},
             "daily_r": 0.0,
@@ -39,7 +39,7 @@ def _save_state(path: Path, state: dict) -> None:
 
 
 def _signal_id(symbol: str, candidate: dict) -> str:
-    return f"{symbol}|V5.1|{candidate['confirmation_time_utc']}|{candidate['direction']}|OTE079"
+    return f"{symbol}|V5.1-NASDAQ|{candidate['confirmation_time_utc']}|{candidate['direction']}|OTE079"
 
 
 def _print_request(req: dict) -> None:
@@ -59,13 +59,13 @@ def run(args) -> None:
     settings = connect()
     try:
         account_is_demo_only()
-        symbol = resolve_symbol(settings.symbol)
+        symbol = resolve_symbol(args.symbol)
         account = mt5.account_info()
         if account is None:
             raise RuntimeError(f"Unable to read account: {mt5.last_error()}")
 
         mode = "DEMO EXECUTION ENABLED" if args.execute_demo else "DRY RUN"
-        print("CRT V5.1 — CORRECTED CAUSAL DEMO RUNNER")
+        print("CRT V5.1 — NASDAQ CORRECTED CAUSAL DEMO RUNNER")
         print(f"Mode: {mode}")
         print(f"Symbol: {symbol} | OTE 0.79 | setup risk: {cfg.risk_fraction:.3%}")
         print("HARD LOCK: non-demo MT5 accounts are rejected before order validation/submission.")
@@ -80,8 +80,6 @@ def run(args) -> None:
                 h1 = get_rates(symbol, "H1", 400, completed_only=True, asof=tick["time"])
                 m15 = get_rates(symbol, "M15", 1200, completed_only=True, asof=tick["time"])
                 m5 = get_rates(symbol, "M5", 3000, completed_only=True, asof=tick["time"])
-                # V5.1 cohort starts when this runner first sees a corrected signal;
-                # unlike V5.0, no historical backfill is accepted.
                 start = state.get("started_at_utc") or pd.Timestamp(tick["time"]).isoformat()
                 state.setdefault("started_at_utc", start)
                 candidate = _candidate_from_latest_causal(h1, m15, m5, start)
@@ -104,7 +102,7 @@ def run(args) -> None:
                         state["signals"][sid] = record
                         _save_state(state_path, state)
 
-                        print(f"\nNEW V5.1 SETUP {candidate['direction']} confirmation={candidate['confirmation_time_utc']}")
+                        print(f"\nNEW NASDAQ V5.1 SETUP {candidate['direction']} confirmation={candidate['confirmation_time_utc']}")
                         print(
                             f"entry={candidate['entry']:.3f} stop={candidate['stop']:.3f} "
                             f"tp1={candidate['tp1']:.3f} tp2={candidate['tp2']:.3f}"
@@ -124,7 +122,7 @@ def run(args) -> None:
                         if args.execute_demo:
                             record["order_tickets"] = [int(getattr(r, "order", 0)) for r in results]
                             record["status"] = "PENDING_ORDERS_PLACED"
-                            print(f"DEMO ORDERS PLACED: {record['order_tickets']}")
+                            print(f"NASDAQ DEMO ORDERS PLACED: {record['order_tickets']}")
                         else:
                             record["status"] = "DRY_RUN_VALIDATED"
                             print("DRY RUN PASSED: order_check accepted both requests; order_send() was NOT called.")
@@ -137,19 +135,20 @@ def run(args) -> None:
                 break
             time.sleep(args.poll_seconds)
     except KeyboardInterrupt:
-        print("\nV5.1 runner stopped by user. State preserved.")
+        print("\nNASDAQ V5.1 runner stopped by user. State preserved.")
         _save_state(state_path, state)
     finally:
         disconnect()
 
 
 if __name__ == "__main__":
-    p = argparse.ArgumentParser(description="V5.1 corrected causal GOLD demo execution runner")
+    p = argparse.ArgumentParser(description="V5.1 corrected causal NASDAQ demo execution runner")
+    p.add_argument("--symbol", default="US100Cash")
     p.add_argument("--risk", type=float, default=0.01)
     p.add_argument("--daily-loss-r", type=float, default=2.0)
     p.add_argument("--max-consecutive-losses", type=int, default=3)
     p.add_argument("--poll-seconds", type=int, default=5)
-    p.add_argument("--state", default="data/demo/v5_1_demo_state.json")
+    p.add_argument("--state", default="data/demo/v5_1_nasdaq_demo_state.json")
     p.add_argument("--once", action="store_true")
     p.add_argument(
         "--execute-demo",
