@@ -39,18 +39,17 @@ def run(args) -> None:
     )
     state_path = Path(args.state)
     state = load_state(state_path)
-    # Persist cohort start before any MT5/sizing work so a crash cannot reset
-    # the prospective boundary on the next launch.
     save_state(state_path, state)
 
     settings = connect()
     try:
-        symbol = resolve_symbol(settings.symbol)
+        preferred_symbol = getattr(args, "symbol", None) or settings.symbol
+        symbol = resolve_symbol(preferred_symbol)
         account = mt5.account_info()
         if account is None:
             raise RuntimeError(f"Unable to read account: {mt5.last_error()}")
 
-        print("CRT V5.0 — PROSPECTIVE SHADOW MODE")
+        print("CRT V5.1 — PROSPECTIVE SHADOW MODE")
         print(f"Symbol: {symbol} | frozen entry: OTE 0.79 | risk model: {cfg.risk_fraction:.3%}")
         print(f"Target: {cfg.target_closed_fills} completed shadow fills")
         print("SAFETY LOCK: market data + simulated orders only; mt5.order_send() is not called.\n")
@@ -99,9 +98,6 @@ def run(args) -> None:
                         )
                         sig["sizing_error"] = None
                     except Exception as exc:
-                        # Sizing is observational in shadow mode. Do not lose a
-                        # genuine forward fill because a broker calculator field
-                        # is temporarily unavailable.
                         sig["sizing_error"] = str(exc)
                         print(f"SHADOW SIZING WARNING {sig['signal_id']}: {exc}")
 
@@ -140,10 +136,11 @@ def run(args) -> None:
 
 
 if __name__ == "__main__":
-    p = argparse.ArgumentParser(description="V5.0 frozen OTE 0.79 prospective MT5 shadow trader")
+    p = argparse.ArgumentParser(description="V5.1 frozen OTE 0.79 prospective MT5 shadow trader")
     p.add_argument("--target-fills", type=int, default=40, choices=range(30, 51))
     p.add_argument("--risk", type=float, default=0.01)
     p.add_argument("--poll-seconds", type=int, default=5)
+    p.add_argument("--symbol", default=None)
     p.add_argument("--state", default="data/shadow/v5_shadow_state.json")
     p.add_argument("--output-dir", default="data/shadow/v5")
     p.add_argument("--once", action="store_true", help="Run one polling cycle for diagnostics")
