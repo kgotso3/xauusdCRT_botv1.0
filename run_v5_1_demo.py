@@ -89,7 +89,8 @@ def run(args) -> None:
                 if candidate is not None:
                     candidate = dict(candidate)
                     candidate["retest_expiry_utc"] = (
-                        pd.Timestamp(candidate["confirmation_time_utc"]) + pd.Timedelta(hours=2)
+                        pd.Timestamp(candidate["confirmation_time_utc"])
+                        + pd.to_timedelta(2, unit="h")
                     ).isoformat()
                     sid = _signal_id(symbol, candidate)
                     if sid not in state["signals"]:
