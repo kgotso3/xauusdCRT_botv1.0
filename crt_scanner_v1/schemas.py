@@ -41,4 +41,4 @@ class TradingViewPayload(BaseModel):
     version: str
     scan_type: Literal["AM", "PM"]
     time_ny: str
-    symbols: list[SymbolScan] = Field(min_length=1, max_length=7)
+    symbols: list[SymbolScan] = Field(min_length=1, max_length=10)
