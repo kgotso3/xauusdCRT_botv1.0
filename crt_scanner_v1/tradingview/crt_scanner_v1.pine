@@ -7,9 +7,7 @@ indicator("CRT Scanner V1 — 7 Symbol NY 3-Candle Scanner", overlay = true, dyn
 
 string TZ = "America/New_York"
 
-// —————————————————————————————————————————————————————————————————————————————
 // Inputs
-// —————————————————————————————————————————————————————————————————————————————
 string sym1 = input.symbol("OANDA:XAUUSD", "1. Gold")
 string sym2 = input.symbol("COINBASE:BTCUSD", "2. BTCUSD")
 string sym3 = input.symbol("OANDA:GBPUSD", "3. GBPUSD")
@@ -20,13 +18,9 @@ string sym7 = input.symbol("OANDA:USDCAD", "7. USDCAD")
 string webhookSecret = input.string("replace-me", "Webhook secret")
 bool showTable = input.bool(true, "Show scanner table")
 
-// —————————————————————————————————————————————————————————————————————————————
 // Custom NY 4H session aggregation, executed inside each symbol's 15m context.
-// Returns C1/C2 values for both the AM and PM CRT sequences.
-// —————————————————————————————————————————————————————————————————————————————
 f_crt_state() =>
     int h = hour(time, TZ)
-
     bool inAmC1 = h >= 1 and h < 5
     bool inAmC2 = h >= 5 and h < 9
     bool inPmC1 = h >= 13 and h < 17
@@ -37,7 +31,6 @@ f_crt_state() =>
     var float amC2H = na
     var float amC2L = na
     var float amC2C = na
-
     var float pmC1H = na
     var float pmC1L = na
     var float pmC2H = na
@@ -82,18 +75,11 @@ f_crt_state() =>
 
     [amC1H, amC1L, amC2H, amC2L, amC2C, pmC1H, pmC1L, pmC2H, pmC2L, pmC2C]
 
-// D1 gets greater weight than H4. This is a trend classifier, not a prediction.
+// D1 receives greater weight than H4. Trend classifier only.
 f_symbol(string sym, bool useAm) =>
-    [amC1H, amC1L, amC2H, amC2L, amC2C, pmC1H, pmC1L, pmC2H, pmC2L, pmC2C] = request.security(
-         sym, "15", f_crt_state(), gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
-
-    [dClose, dEma20, dEma50, dEma50Old] = request.security(
-         sym, "D", [close[1], ta.ema(close, 20)[1], ta.ema(close, 50)[1], ta.ema(close, 50)[6]],
-         gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
-
-    [h4Close, h4Ema20, h4Ema50] = request.security(
-         sym, "240", [close[1], ta.ema(close, 20)[1], ta.ema(close, 50)[1]],
-         gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
+    [amC1H, amC1L, amC2H, amC2L, amC2C, pmC1H, pmC1L, pmC2H, pmC2L, pmC2C] = request.security(sym, "15", f_crt_state(), gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
+    [dClose, dEma20, dEma50, dEma50Old] = request.security(sym, "D", [close[1], ta.ema(close, 20)[1], ta.ema(close, 50)[1], ta.ema(close, 50)[6]], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
+    [h4Close, h4Ema20, h4Ema50] = request.security(sym, "240", [close[1], ta.ema(close, 20)[1], ta.ema(close, 50)[1]], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
 
     int score = 0
     score += dClose > dEma50 ? 2 : -2
@@ -104,7 +90,6 @@ f_symbol(string sym, bool useAm) =>
     score += h4Close > h4Ema20 ? 1 : -1
 
     string bias = score >= 4 ? "BULLISH" : score <= -4 ? "BEARISH" : "NEUTRAL"
-
     float c1H = useAm ? amC1H : pmC1H
     float c1L = useAm ? amC1L : pmC1L
     float c2H = useAm ? amC2H : pmC2H
@@ -130,24 +115,23 @@ f_num(float v) =>
 f_bool(bool v) =>
     v ? "true" : "false"
 
-// Build JSON with one complete concatenation statement per field.
-// This avoids Pine line-continuation parsing issues inside long JSON expressions.
+// JSON builder: every concatenation is a complete Pine statement.
 f_json_item(string label, string ticker, string bias, int score, string sweep, bool closeInside, bool valid, string direction, bool aligned, float c1H, float c1L, float c1Mid, float c2C) =>
     string item = "{"
-    item += "\"label\":\"" + label + "\","
-    item += "\"ticker\":\"" + ticker + "\","
-    item += "\"bias\":\"" + bias + "\","
-    item += "\"trend_score\":" + str.tostring(score) + ","
-    item += "\"sweep\":\"" + sweep + "\","
-    item += "\"close_inside\":" + f_bool(closeInside) + ","
-    item += "\"valid_crt\":" + f_bool(valid) + ","
-    item += "\"direction\":\"" + direction + "\","
-    item += "\"aligned\":" + f_bool(aligned) + ","
-    item += "\"c1_high\":" + f_num(c1H) + ","
-    item += "\"c1_low\":" + f_num(c1L) + ","
-    item += "\"c1_mid\":" + f_num(c1Mid) + ","
-    item += "\"c2_close\":" + f_num(c2C)
-    item += "}"
+    item := item + "\"label\":\"" + label + "\","
+    item := item + "\"ticker\":\"" + ticker + "\","
+    item := item + "\"bias\":\"" + bias + "\","
+    item := item + "\"trend_score\":" + str.tostring(score) + ","
+    item := item + "\"sweep\":\"" + sweep + "\","
+    item := item + "\"close_inside\":" + f_bool(closeInside) + ","
+    item := item + "\"valid_crt\":" + f_bool(valid) + ","
+    item := item + "\"direction\":\"" + direction + "\","
+    item := item + "\"aligned\":" + f_bool(aligned) + ","
+    item := item + "\"c1_high\":" + f_num(c1H) + ","
+    item := item + "\"c1_low\":" + f_num(c1L) + ","
+    item := item + "\"c1_mid\":" + f_num(c1Mid) + ","
+    item := item + "\"c2_close\":" + f_num(c2C)
+    item := item + "}"
     item
 
 f_cell_bg(string value) =>
@@ -174,9 +158,7 @@ f_row(table t, int row, string label, string bias, string sweep, bool inside, bo
     table.cell(t, 5, row, direction, bgcolor = f_cell_bg(direction))
     table.cell(t, 6, row, alignText, bgcolor = f_cell_bg(alignText))
 
-// —————————————————————————————————————————————————————————————————————————————
-// Timing: the 15m bar ending at 09:00/21:00 NY is the causal trigger.
-// —————————————————————————————————————————————————————————————————————————————
+// Timing: 15m bar ending at 09:00/21:00 NY is the causal trigger.
 bool tfOk = timeframe.isminutes and timeframe.multiplier == 15
 int closeHourNY = hour(time_close, TZ)
 int closeMinuteNY = minute(time_close, TZ)
@@ -192,9 +174,7 @@ bool useAm = closeHourNY >= 9 and closeHourNY < 21
 [bias6, score6, sweep6, inside6, valid6, dir6, aligned6, c1h6, c1l6, c1m6, c2c6] = f_symbol(sym6, useAm)
 [bias7, score7, sweep7, inside7, valid7, dir7, aligned7, c1h7, c1l7, c1m7, c2c7] = f_symbol(sym7, useAm)
 
-// —————————————————————————————————————————————————————————————————————————————
 // Scanner table
-// —————————————————————————————————————————————————————————————————————————————
 var table scanner = table.new(position.top_right, 7, 9, border_width = 1)
 if barstate.islast and showTable
     table.cell(scanner, 0, 0, useAm ? "AM 09:00 NY" : "PM 21:00 NY")
@@ -222,24 +202,22 @@ if barstate.islast and showTable
 if barstate.islast and not tfOk
     label.new(bar_index, high, "CRT Scanner V1: use a 15-minute host chart for 09:00 / 21:00 NY alerts.", style = label.style_label_down)
 
-// —————————————————————————————————————————————————————————————————————————————
-// One consolidated webhook payload containing all seven symbols.
-// —————————————————————————————————————————————————————————————————————————————
+// Consolidated TradingView webhook payload.
 if isScanAM or isScanPM
     string scanType = isScanAM ? "AM" : "PM"
     string timeNy = str.format_time(time_close, "yyyy-MM-dd HH:mm", TZ)
     string payload = "{"
-    payload += "\"secret\":\"" + webhookSecret + "\","
-    payload += "\"version\":\"1.0.2\","
-    payload += "\"scan_type\":\"" + scanType + "\","
-    payload += "\"time_ny\":\"" + timeNy + " NY\","
-    payload += "\"symbols\":["
-    payload += f_json_item("XAUUSD", sym1, bias1, score1, sweep1, inside1, valid1, dir1, aligned1, c1h1, c1l1, c1m1, c2c1) + ","
-    payload += f_json_item("BTCUSD", sym2, bias2, score2, sweep2, inside2, valid2, dir2, aligned2, c1h2, c1l2, c1m2, c2c2) + ","
-    payload += f_json_item("GBPUSD", sym3, bias3, score3, sweep3, inside3, valid3, dir3, aligned3, c1h3, c1l3, c1m3, c2c3) + ","
-    payload += f_json_item("EURGBP", sym4, bias4, score4, sweep4, inside4, valid4, dir4, aligned4, c1h4, c1l4, c1m4, c2c4) + ","
-    payload += f_json_item("EURUSD", sym5, bias5, score5, sweep5, inside5, valid5, dir5, aligned5, c1h5, c1l5, c1m5, c2c5) + ","
-    payload += f_json_item("USDJPY", sym6, bias6, score6, sweep6, inside6, valid6, dir6, aligned6, c1h6, c1l6, c1m6, c2c6) + ","
-    payload += f_json_item("USDCAD", sym7, bias7, score7, sweep7, inside7, valid7, dir7, aligned7, c1h7, c1l7, c1m7, c2c7)
-    payload += "]}"
+    payload := payload + "\"secret\":\"" + webhookSecret + "\","
+    payload := payload + "\"version\":\"1.0.3\","
+    payload := payload + "\"scan_type\":\"" + scanType + "\","
+    payload := payload + "\"time_ny\":\"" + timeNy + " NY\","
+    payload := payload + "\"symbols\":["
+    payload := payload + f_json_item("XAUUSD", sym1, bias1, score1, sweep1, inside1, valid1, dir1, aligned1, c1h1, c1l1, c1m1, c2c1) + ","
+    payload := payload + f_json_item("BTCUSD", sym2, bias2, score2, sweep2, inside2, valid2, dir2, aligned2, c1h2, c1l2, c1m2, c2c2) + ","
+    payload := payload + f_json_item("GBPUSD", sym3, bias3, score3, sweep3, inside3, valid3, dir3, aligned3, c1h3, c1l3, c1m3, c2c3) + ","
+    payload := payload + f_json_item("EURGBP", sym4, bias4, score4, sweep4, inside4, valid4, dir4, aligned4, c1h4, c1l4, c1m4, c2c4) + ","
+    payload := payload + f_json_item("EURUSD", sym5, bias5, score5, sweep5, inside5, valid5, dir5, aligned5, c1h5, c1l5, c1m5, c2c5) + ","
+    payload := payload + f_json_item("USDJPY", sym6, bias6, score6, sweep6, inside6, valid6, dir6, aligned6, c1h6, c1l6, c1m6, c2c6) + ","
+    payload := payload + f_json_item("USDCAD", sym7, bias7, score7, sweep7, inside7, valid7, dir7, aligned7, c1h7, c1l7, c1m7, c2c7)
+    payload := payload + "]}"
     alert(payload, alert.freq_once_per_bar_close)
