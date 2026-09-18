@@ -46,7 +46,7 @@ for item in latest["symbols"]:
     })
 
 df = pd.DataFrame(rows)
-st.subheader("7-symbol scanner")
+st.subheader("10-market scanner")
 st.dataframe(df, use_container_width=True, hide_index=True)
 
 valid = [x for x in latest["symbols"] if x["valid_crt"]]
