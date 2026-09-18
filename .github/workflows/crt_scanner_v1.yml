@@ -1,0 +1,28 @@
+name: CRT Scanner V1 Tests
+
+on:
+  push:
+    branches: [crt-scanner-v1]
+    paths:
+      - 'crt_scanner_v1/**'
+      - '.github/workflows/crt_scanner_v1.yml'
+  pull_request:
+    paths:
+      - 'crt_scanner_v1/**'
+      - '.github/workflows/crt_scanner_v1.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: crt_scanner_v1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --upgrade pip
+      - run: pip install -r requirements.txt
+      - run: pytest -q
+      - run: python -m compileall -q .
