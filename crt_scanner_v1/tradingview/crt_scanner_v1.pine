@@ -92,9 +92,63 @@ f_crt_state() =>
 
     [amC1H, amC1L, amC2H, amC2L, amC2C, pmC1H, pmC1L, pmC2H, pmC2L, pmC2C, amC1Day, amC2Day, pmC1Day, pmC2Day]
 
+// M5 C3 monitor. It reconstructs C2 on 5m and then tracks whether C3 raids a C2 extreme.
+// AM C3 = 09:00-13:00 NY. PM C3 = 21:00-01:00 NY.
+f_ltf_c2_raid_state() =>
+    int h = hour(time, TZ)
+    int m = minute(time, TZ)
+    bool inAmC2 = h >= 5 and h < 9
+    bool inPmC2 = h >= 17 and h < 21
+    bool inAmC3 = h >= 9 and h < 13
+    bool inPmC3 = h >= 21 or h < 1
+    bool startAmC3 = h == 9 and m == 0
+    bool startPmC3 = h == 21 and m == 0
+
+    var float amC2H = na
+    var float amC2L = na
+    var float pmC2H = na
+    var float pmC2L = na
+    var bool amLowRaid = false
+    var bool amHighRaid = false
+    var bool pmLowRaid = false
+    var bool pmHighRaid = false
+
+    if inAmC2
+        if not inAmC2[1]
+            amC2H := high
+            amC2L := low
+        else
+            amC2H := math.max(amC2H, high)
+            amC2L := math.min(amC2L, low)
+
+    if inPmC2
+        if not inPmC2[1]
+            pmC2H := high
+            pmC2L := low
+        else
+            pmC2H := math.max(pmC2H, high)
+            pmC2L := math.min(pmC2L, low)
+
+    if startAmC3
+        amLowRaid := not na(amC2L) and low < amC2L
+        amHighRaid := not na(amC2H) and high > amC2H
+    else if inAmC3
+        amLowRaid := amLowRaid or (not na(amC2L) and low < amC2L)
+        amHighRaid := amHighRaid or (not na(amC2H) and high > amC2H)
+
+    if startPmC3
+        pmLowRaid := not na(pmC2L) and low < pmC2L
+        pmHighRaid := not na(pmC2H) and high > pmC2H
+    else if inPmC3
+        pmLowRaid := pmLowRaid or (not na(pmC2L) and low < pmC2L)
+        pmHighRaid := pmHighRaid or (not na(pmC2H) and high > pmC2H)
+
+    [amLowRaid, amHighRaid, pmLowRaid, pmHighRaid]
+
 // D1 receives greater weight than H4. Trend classifier only.
 f_symbol(string sym, bool useAm) =>
     [amC1H, amC1L, amC2H, amC2L, amC2C, pmC1H, pmC1L, pmC2H, pmC2L, pmC2C, amC1Day, amC2Day, pmC1Day, pmC2Day] = request.security(sym, "15", f_crt_state(), gaps = barmerge.gaps_on, lookahead = barmerge.lookahead_off)
+    [amC2LowRaid, amC2HighRaid, pmC2LowRaid, pmC2HighRaid] = request.security(sym, "5", f_ltf_c2_raid_state(), gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
     [dClose, dEma20, dEma50, dEma50Old] = request.security(sym, "D", [close[1], ta.ema(close, 20)[1], ta.ema(close, 50)[1], ta.ema(close, 50)[6]], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
     [h4Close, h4Ema20, h4Ema50] = request.security(sym, "240", [close[1], ta.ema(close, 20)[1], ta.ema(close, 50)[1]], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
 
@@ -114,6 +168,8 @@ f_symbol(string sym, bool useAm) =>
     float c2C = useAm ? amC2C : pmC2C
     int c1Day = useAm ? amC1Day : pmC1Day
     int c2Day = useAm ? amC2Day : pmC2Day
+    bool c2LowRaided = useAm ? amC2LowRaid : pmC2LowRaid
+    bool c2HighRaided = useAm ? amC2HighRaid : pmC2HighRaid
 
     bool ready = not na(c1H) and not na(c1L) and not na(c2H) and not na(c2L) and not na(c2C) and not na(c1Day) and c1Day == c2Day
     bool sweptHigh = ready and c2H > c1H
@@ -123,10 +179,11 @@ f_symbol(string sym, bool useAm) =>
     bool valid = ready and exactlyOne and closeInside
     string sweep = sweptHigh and sweptLow ? "BOTH" : sweptHigh ? "HIGH" : sweptLow ? "LOW" : "NONE"
     string direction = valid ? (sweptLow ? "BULLISH" : "BEARISH") : "-"
+    string c2Sweep = valid ? (direction == "BULLISH" ? (c2LowRaided ? "LOW" : "-") : (c2HighRaided ? "HIGH" : "-")) : "-"
     bool aligned = valid and bias == direction
     float c1Mid = ready ? (c1H + c1L) / 2.0 : na
 
-    [bias, score, sweep, closeInside, valid, direction, aligned, c1H, c1L, c1Mid, c2C, ready]
+    [bias, score, sweep, closeInside, valid, direction, c2Sweep, aligned, c1H, c1L, c1Mid, c2C, ready]
 
 f_num(float v) =>
     na(v) ? "null" : str.tostring(v)
@@ -164,17 +221,18 @@ f_cell_bg(string value) =>
         bg := color.new(color.red, 85)
     bg
 
-f_row(table t, int row, string label, string bias, string sweep, bool inside, bool valid, string direction, bool aligned) =>
+f_row(table t, int row, string label, string bias, string c1Sweep, bool inside, bool valid, string direction, string c2Sweep, bool aligned) =>
     string insideText = inside ? "YES" : "NO"
     string crtText = valid ? "VALID" : "INVALID"
     string alignText = valid ? (aligned ? "YES" : "NO") : "-"
     table.cell(t, 0, row, label)
     table.cell(t, 1, row, bias, bgcolor = f_cell_bg(bias))
-    table.cell(t, 2, row, sweep)
+    table.cell(t, 2, row, c1Sweep)
     table.cell(t, 3, row, insideText, bgcolor = f_cell_bg(insideText))
     table.cell(t, 4, row, crtText, bgcolor = f_cell_bg(crtText))
     table.cell(t, 5, row, direction, bgcolor = f_cell_bg(direction))
-    table.cell(t, 6, row, alignText, bgcolor = f_cell_bg(alignText))
+    table.cell(t, 6, row, c2Sweep, bgcolor = c2Sweep == "-" ? color.new(color.gray, 88) : color.new(color.green, 75))
+    table.cell(t, 7, row, alignText, bgcolor = f_cell_bg(alignText))
 
 f_valid_name(bool valid, string label) =>
     valid ? label + " " : ""
@@ -191,16 +249,16 @@ bool selectedSession = testSessions == "AM + PM" or (testSessions == "AM only" a
 bool countEvent = (isScanAM or isScanPM) and inTestRange and selectedSession
 
 // Ten-symbol scan
-[bias1, score1, sweep1, inside1, valid1, dir1, aligned1, c1h1, c1l1, c1m1, c2c1, ready1] = f_symbol(sym1, useAm)
-[bias2, score2, sweep2, inside2, valid2, dir2, aligned2, c1h2, c1l2, c1m2, c2c2, ready2] = f_symbol(sym2, useAm)
-[bias3, score3, sweep3, inside3, valid3, dir3, aligned3, c1h3, c1l3, c1m3, c2c3, ready3] = f_symbol(sym3, useAm)
-[bias4, score4, sweep4, inside4, valid4, dir4, aligned4, c1h4, c1l4, c1m4, c2c4, ready4] = f_symbol(sym4, useAm)
-[bias5, score5, sweep5, inside5, valid5, dir5, aligned5, c1h5, c1l5, c1m5, c2c5, ready5] = f_symbol(sym5, useAm)
-[bias6, score6, sweep6, inside6, valid6, dir6, aligned6, c1h6, c1l6, c1m6, c2c6, ready6] = f_symbol(sym6, useAm)
-[bias7, score7, sweep7, inside7, valid7, dir7, aligned7, c1h7, c1l7, c1m7, c2c7, ready7] = f_symbol(sym7, useAm)
-[bias8, score8, sweep8, inside8, valid8, dir8, aligned8, c1h8, c1l8, c1m8, c2c8, ready8] = f_symbol(sym8, useAm)
-[bias9, score9, sweep9, inside9, valid9, dir9, aligned9, c1h9, c1l9, c1m9, c2c9, ready9] = f_symbol(sym9, useAm)
-[bias10, score10, sweep10, inside10, valid10, dir10, aligned10, c1h10, c1l10, c1m10, c2c10, ready10] = f_symbol(sym10, useAm)
+[bias1, score1, sweep1, inside1, valid1, dir1, c2sweep1, aligned1, c1h1, c1l1, c1m1, c2c1, ready1] = f_symbol(sym1, useAm)
+[bias2, score2, sweep2, inside2, valid2, dir2, c2sweep2, aligned2, c1h2, c1l2, c1m2, c2c2, ready2] = f_symbol(sym2, useAm)
+[bias3, score3, sweep3, inside3, valid3, dir3, c2sweep3, aligned3, c1h3, c1l3, c1m3, c2c3, ready3] = f_symbol(sym3, useAm)
+[bias4, score4, sweep4, inside4, valid4, dir4, c2sweep4, aligned4, c1h4, c1l4, c1m4, c2c4, ready4] = f_symbol(sym4, useAm)
+[bias5, score5, sweep5, inside5, valid5, dir5, c2sweep5, aligned5, c1h5, c1l5, c1m5, c2c5, ready5] = f_symbol(sym5, useAm)
+[bias6, score6, sweep6, inside6, valid6, dir6, c2sweep6, aligned6, c1h6, c1l6, c1m6, c2c6, ready6] = f_symbol(sym6, useAm)
+[bias7, score7, sweep7, inside7, valid7, dir7, c2sweep7, aligned7, c1h7, c1l7, c1m7, c2c7, ready7] = f_symbol(sym7, useAm)
+[bias8, score8, sweep8, inside8, valid8, dir8, c2sweep8, aligned8, c1h8, c1l8, c1m8, c2c8, ready8] = f_symbol(sym8, useAm)
+[bias9, score9, sweep9, inside9, valid9, dir9, c2sweep9, aligned9, c1h9, c1l9, c1m9, c2c9, ready9] = f_symbol(sym9, useAm)
+[bias10, score10, sweep10, inside10, valid10, dir10, c2sweep10, aligned10, c1h10, c1l10, c1m10, c2c10, ready10] = f_symbol(sym10, useAm)
 
 // Frequency-test counters. Eligible scans are counted per symbol to avoid weekend/holiday bias.
 var int scans1 = 0
@@ -327,7 +385,7 @@ if countEvent
             alignedCrt10 := alignedCrt10 + (aligned10 ? 1 : 0)
 
 // Live scanner table
-var table scanner = table.new(position.top_right, 7, 12, border_width = 1)
+var table scanner = table.new(position.top_right, 8, 12, border_width = 1)
 if barstate.islast and showTable
     table.cell(scanner, 0, 0, useAm ? "AM 09:00 NY" : "PM 21:00 NY")
     table.cell(scanner, 1, 0, "")
@@ -336,23 +394,25 @@ if barstate.islast and showTable
     table.cell(scanner, 4, 0, "")
     table.cell(scanner, 5, 0, "")
     table.cell(scanner, 6, 0, "")
+    table.cell(scanner, 7, 0, "")
     table.cell(scanner, 0, 1, "Symbol")
     table.cell(scanner, 1, 1, "Trend")
-    table.cell(scanner, 2, 1, "C2 Sweep")
+    table.cell(scanner, 2, 1, "C1 Sweep")
     table.cell(scanner, 3, 1, "Close In")
     table.cell(scanner, 4, 1, "CRT")
     table.cell(scanner, 5, 1, "Direction")
-    table.cell(scanner, 6, 1, "Aligned")
-    f_row(scanner, 2, "XAUUSD", bias1, sweep1, inside1, valid1, dir1, aligned1)
-    f_row(scanner, 3, "NAS100", bias2, sweep2, inside2, valid2, dir2, aligned2)
-    f_row(scanner, 4, "US500", bias3, sweep3, inside3, valid3, dir3, aligned3)
-    f_row(scanner, 5, "US30", bias4, sweep4, inside4, valid4, dir4, aligned4)
-    f_row(scanner, 6, "EURUSD", bias5, sweep5, inside5, valid5, dir5, aligned5)
-    f_row(scanner, 7, "GBPUSD", bias6, sweep6, inside6, valid6, dir6, aligned6)
-    f_row(scanner, 8, "USDJPY", bias7, sweep7, inside7, valid7, dir7, aligned7)
-    f_row(scanner, 9, "USDCAD", bias8, sweep8, inside8, valid8, dir8, aligned8)
-    f_row(scanner, 10, "AUDUSD", bias9, sweep9, inside9, valid9, dir9, aligned9)
-    f_row(scanner, 11, "BTCUSD", bias10, sweep10, inside10, valid10, dir10, aligned10)
+    table.cell(scanner, 6, 1, "C2 Sweep")
+    table.cell(scanner, 7, 1, "Aligned")
+    f_row(scanner, 2, "XAUUSD", bias1, sweep1, inside1, valid1, dir1, c2sweep1, aligned1)
+    f_row(scanner, 3, "NAS100", bias2, sweep2, inside2, valid2, dir2, c2sweep2, aligned2)
+    f_row(scanner, 4, "US500", bias3, sweep3, inside3, valid3, dir3, c2sweep3, aligned3)
+    f_row(scanner, 5, "US30", bias4, sweep4, inside4, valid4, dir4, c2sweep4, aligned4)
+    f_row(scanner, 6, "EURUSD", bias5, sweep5, inside5, valid5, dir5, c2sweep5, aligned5)
+    f_row(scanner, 7, "GBPUSD", bias6, sweep6, inside6, valid6, dir6, c2sweep6, aligned6)
+    f_row(scanner, 8, "USDJPY", bias7, sweep7, inside7, valid7, dir7, c2sweep7, aligned7)
+    f_row(scanner, 9, "USDCAD", bias8, sweep8, inside8, valid8, dir8, c2sweep8, aligned8)
+    f_row(scanner, 10, "AUDUSD", bias9, sweep9, inside9, valid9, dir9, c2sweep9, aligned9)
+    f_row(scanner, 11, "BTCUSD", bias10, sweep10, inside10, valid10, dir10, c2sweep10, aligned10)
 
 // CRT frequency ranking table: rank primarily by valid CRT count.
 var table ranking = table.new(position.bottom_right, 8, 12, border_width = 1)
@@ -413,7 +473,7 @@ if isScanAM or isScanPM
     string timeNy = str.format_time(time_close, "yyyy-MM-dd HH:mm", TZ)
     string payload = "{"
     payload := payload + "\"secret\":\"" + webhookSecret + "\","
-    payload := payload + "\"version\":\"1.0.5\","
+    payload := payload + "\"version\":\"1.0.6\","
     payload := payload + "\"scan_type\":\"" + scanType + "\","
     payload := payload + "\"time_ny\":\"" + timeNy + " NY\","
     payload := payload + "\"symbols\":["
