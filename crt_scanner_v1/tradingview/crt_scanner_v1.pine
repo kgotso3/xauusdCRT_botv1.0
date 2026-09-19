@@ -20,13 +20,8 @@ string sym10 = input.symbol("COINBASE:BTCUSD", "10. BTCUSD")
 string webhookSecret = input.string("replace-me", "Webhook secret")
 bool showTable = input.bool(true, "Show live scanner table")
 bool showTestMarkers = input.bool(true, "Show historical CRT test markers")
-bool showRankingTable = input.bool(true, "Show CRT frequency ranking")
-int testStart = input.time(timestamp("01 Jan 2026 00:00 +0000"), "Frequency test start")
-int testEnd = input.time(timestamp("31 Dec 2026 23:59 +0000"), "Frequency test end")
-string testSessions = input.string("AM + PM", "Frequency test sessions", options = ["AM + PM", "AM only", "PM only"])
 
 // Custom NY 4H session aggregation executed inside each symbol's 15m context.
-// Session-day keys prevent stale Friday data from being counted on BTC weekend host bars.
 f_crt_state() =>
     int h = hour(time, TZ)
     int dayKey = year(time, TZ) * 10000 + month(time, TZ) * 100 + dayofmonth(time, TZ)
@@ -34,7 +29,6 @@ f_crt_state() =>
     bool inAmC2 = h >= 5 and h < 9
     bool inPmC1 = h >= 13 and h < 17
     bool inPmC2 = h >= 17 and h < 21
-
     var float amC1H = na
     var float amC1L = na
     var float amC2H = na
@@ -49,7 +43,6 @@ f_crt_state() =>
     var int amC2Day = na
     var int pmC1Day = na
     var int pmC2Day = na
-
     if inAmC1
         if not inAmC1[1]
             amC1H := high
@@ -58,7 +51,6 @@ f_crt_state() =>
         else
             amC1H := math.max(amC1H, high)
             amC1L := math.min(amC1L, low)
-
     if inAmC2
         if not inAmC2[1]
             amC2H := high
@@ -69,7 +61,6 @@ f_crt_state() =>
             amC2H := math.max(amC2H, high)
             amC2L := math.min(amC2L, low)
             amC2C := close
-
     if inPmC1
         if not inPmC1[1]
             pmC1H := high
@@ -78,7 +69,6 @@ f_crt_state() =>
         else
             pmC1H := math.max(pmC1H, high)
             pmC1L := math.min(pmC1L, low)
-
     if inPmC2
         if not inPmC2[1]
             pmC2H := high
@@ -89,10 +79,9 @@ f_crt_state() =>
             pmC2H := math.max(pmC2H, high)
             pmC2L := math.min(pmC2L, low)
             pmC2C := close
-
     [amC1H, amC1L, amC2H, amC2L, amC2C, pmC1H, pmC1L, pmC2H, pmC2L, pmC2C, amC1Day, amC2Day, pmC1Day, pmC2Day]
 
-// M5 C3 monitor. It reconstructs C2 on 5m and then tracks whether C3 raids a C2 extreme.
+// M5 C3 monitor. Reconstructs C2 on M5 and tracks whether C3 raids the relevant C2 extreme.
 // AM C3 = 09:00-13:00 NY. PM C3 = 21:00-01:00 NY.
 f_ltf_c2_raid_state() =>
     int h = hour(time, TZ)
@@ -103,7 +92,6 @@ f_ltf_c2_raid_state() =>
     bool inPmC3 = h >= 21 or h < 1
     bool startAmC3 = h == 9 and m == 0
     bool startPmC3 = h == 21 and m == 0
-
     var float amC2H = na
     var float amC2L = na
     var float pmC2H = na
@@ -112,7 +100,6 @@ f_ltf_c2_raid_state() =>
     var bool amHighRaid = false
     var bool pmLowRaid = false
     var bool pmHighRaid = false
-
     if inAmC2
         if not inAmC2[1]
             amC2H := high
@@ -120,7 +107,6 @@ f_ltf_c2_raid_state() =>
         else
             amC2H := math.max(amC2H, high)
             amC2L := math.min(amC2L, low)
-
     if inPmC2
         if not inPmC2[1]
             pmC2H := high
@@ -128,21 +114,18 @@ f_ltf_c2_raid_state() =>
         else
             pmC2H := math.max(pmC2H, high)
             pmC2L := math.min(pmC2L, low)
-
     if startAmC3
         amLowRaid := not na(amC2L) and low < amC2L
         amHighRaid := not na(amC2H) and high > amC2H
     else if inAmC3
         amLowRaid := amLowRaid or (not na(amC2L) and low < amC2L)
         amHighRaid := amHighRaid or (not na(amC2H) and high > amC2H)
-
     if startPmC3
         pmLowRaid := not na(pmC2L) and low < pmC2L
         pmHighRaid := not na(pmC2H) and high > pmC2H
     else if inPmC3
         pmLowRaid := pmLowRaid or (not na(pmC2L) and low < pmC2L)
         pmHighRaid := pmHighRaid or (not na(pmC2H) and high > pmC2H)
-
     [amLowRaid, amHighRaid, pmLowRaid, pmHighRaid]
 
 // D1 receives greater weight than H4. Trend classifier only.
@@ -151,7 +134,6 @@ f_symbol(string sym, bool useAm) =>
     [amC2LowRaid, amC2HighRaid, pmC2LowRaid, pmC2HighRaid] = request.security(sym, "5", f_ltf_c2_raid_state(), gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
     [dClose, dEma20, dEma50, dEma50Old] = request.security(sym, "D", [close[1], ta.ema(close, 20)[1], ta.ema(close, 50)[1], ta.ema(close, 50)[6]], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
     [h4Close, h4Ema20, h4Ema50] = request.security(sym, "240", [close[1], ta.ema(close, 20)[1], ta.ema(close, 50)[1]], gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
-
     int score = 0
     score += dClose > dEma50 ? 2 : -2
     score += dEma20 > dEma50 ? 1 : -1
@@ -159,7 +141,6 @@ f_symbol(string sym, bool useAm) =>
     score += h4Close > h4Ema50 ? 1 : -1
     score += h4Ema20 > h4Ema50 ? 1 : -1
     score += h4Close > h4Ema20 ? 1 : -1
-
     string bias = score >= 4 ? "BULLISH" : score <= -4 ? "BEARISH" : "NEUTRAL"
     float c1H = useAm ? amC1H : pmC1H
     float c1L = useAm ? amC1L : pmC1L
@@ -170,7 +151,6 @@ f_symbol(string sym, bool useAm) =>
     int c2Day = useAm ? amC2Day : pmC2Day
     bool c2LowRaided = useAm ? amC2LowRaid : pmC2LowRaid
     bool c2HighRaided = useAm ? amC2HighRaid : pmC2HighRaid
-
     bool ready = not na(c1H) and not na(c1L) and not na(c2H) and not na(c2L) and not na(c2C) and not na(c1Day) and c1Day == c2Day
     bool sweptHigh = ready and c2H > c1H
     bool sweptLow = ready and c2L < c1L
@@ -182,7 +162,6 @@ f_symbol(string sym, bool useAm) =>
     string c2Sweep = valid ? (direction == "BULLISH" ? (c2LowRaided ? "LOW" : "-") : (c2HighRaided ? "HIGH" : "-")) : "-"
     bool aligned = valid and bias == direction
     float c1Mid = ready ? (c1H + c1L) / 2.0 : na
-
     [bias, score, sweep, closeInside, valid, direction, c2Sweep, aligned, c1H, c1L, c1Mid, c2C, ready]
 
 f_num(float v) =>
@@ -244,9 +223,6 @@ int closeMinuteNY = minute(time_close, TZ)
 bool isScanAM = tfOk and barstate.isconfirmed and closeHourNY == 9 and closeMinuteNY == 0
 bool isScanPM = tfOk and barstate.isconfirmed and closeHourNY == 21 and closeMinuteNY == 0
 bool useAm = closeHourNY >= 9 and closeHourNY < 21
-bool inTestRange = time_close >= testStart and time_close <= testEnd
-bool selectedSession = testSessions == "AM + PM" or (testSessions == "AM only" and isScanAM) or (testSessions == "PM only" and isScanPM)
-bool countEvent = (isScanAM or isScanPM) and inTestRange and selectedSession
 
 // Ten-symbol scan
 [bias1, score1, sweep1, inside1, valid1, dir1, c2sweep1, aligned1, c1h1, c1l1, c1m1, c2c1, ready1] = f_symbol(sym1, useAm)
@@ -260,131 +236,7 @@ bool countEvent = (isScanAM or isScanPM) and inTestRange and selectedSession
 [bias9, score9, sweep9, inside9, valid9, dir9, c2sweep9, aligned9, c1h9, c1l9, c1m9, c2c9, ready9] = f_symbol(sym9, useAm)
 [bias10, score10, sweep10, inside10, valid10, dir10, c2sweep10, aligned10, c1h10, c1l10, c1m10, c2c10, ready10] = f_symbol(sym10, useAm)
 
-// Frequency-test counters. Eligible scans are counted per symbol to avoid weekend/holiday bias.
-var int scans1 = 0
-var int scans2 = 0
-var int scans3 = 0
-var int scans4 = 0
-var int scans5 = 0
-var int scans6 = 0
-var int scans7 = 0
-var int scans8 = 0
-var int scans9 = 0
-var int scans10 = 0
-var int crt1 = 0
-var int crt2 = 0
-var int crt3 = 0
-var int crt4 = 0
-var int crt5 = 0
-var int crt6 = 0
-var int crt7 = 0
-var int crt8 = 0
-var int crt9 = 0
-var int crt10 = 0
-var int am1 = 0
-var int am2 = 0
-var int am3 = 0
-var int am4 = 0
-var int am5 = 0
-var int am6 = 0
-var int am7 = 0
-var int am8 = 0
-var int am9 = 0
-var int am10 = 0
-var int pm1 = 0
-var int pm2 = 0
-var int pm3 = 0
-var int pm4 = 0
-var int pm5 = 0
-var int pm6 = 0
-var int pm7 = 0
-var int pm8 = 0
-var int pm9 = 0
-var int pm10 = 0
-var int alignedCrt1 = 0
-var int alignedCrt2 = 0
-var int alignedCrt3 = 0
-var int alignedCrt4 = 0
-var int alignedCrt5 = 0
-var int alignedCrt6 = 0
-var int alignedCrt7 = 0
-var int alignedCrt8 = 0
-var int alignedCrt9 = 0
-var int alignedCrt10 = 0
-
-if countEvent
-    if ready1
-        scans1 := scans1 + 1
-        if valid1
-            crt1 := crt1 + 1
-            am1 := am1 + (isScanAM ? 1 : 0)
-            pm1 := pm1 + (isScanPM ? 1 : 0)
-            alignedCrt1 := alignedCrt1 + (aligned1 ? 1 : 0)
-    if ready2
-        scans2 := scans2 + 1
-        if valid2
-            crt2 := crt2 + 1
-            am2 := am2 + (isScanAM ? 1 : 0)
-            pm2 := pm2 + (isScanPM ? 1 : 0)
-            alignedCrt2 := alignedCrt2 + (aligned2 ? 1 : 0)
-    if ready3
-        scans3 := scans3 + 1
-        if valid3
-            crt3 := crt3 + 1
-            am3 := am3 + (isScanAM ? 1 : 0)
-            pm3 := pm3 + (isScanPM ? 1 : 0)
-            alignedCrt3 := alignedCrt3 + (aligned3 ? 1 : 0)
-    if ready4
-        scans4 := scans4 + 1
-        if valid4
-            crt4 := crt4 + 1
-            am4 := am4 + (isScanAM ? 1 : 0)
-            pm4 := pm4 + (isScanPM ? 1 : 0)
-            alignedCrt4 := alignedCrt4 + (aligned4 ? 1 : 0)
-    if ready5
-        scans5 := scans5 + 1
-        if valid5
-            crt5 := crt5 + 1
-            am5 := am5 + (isScanAM ? 1 : 0)
-            pm5 := pm5 + (isScanPM ? 1 : 0)
-            alignedCrt5 := alignedCrt5 + (aligned5 ? 1 : 0)
-    if ready6
-        scans6 := scans6 + 1
-        if valid6
-            crt6 := crt6 + 1
-            am6 := am6 + (isScanAM ? 1 : 0)
-            pm6 := pm6 + (isScanPM ? 1 : 0)
-            alignedCrt6 := alignedCrt6 + (aligned6 ? 1 : 0)
-    if ready7
-        scans7 := scans7 + 1
-        if valid7
-            crt7 := crt7 + 1
-            am7 := am7 + (isScanAM ? 1 : 0)
-            pm7 := pm7 + (isScanPM ? 1 : 0)
-            alignedCrt7 := alignedCrt7 + (aligned7 ? 1 : 0)
-    if ready8
-        scans8 := scans8 + 1
-        if valid8
-            crt8 := crt8 + 1
-            am8 := am8 + (isScanAM ? 1 : 0)
-            pm8 := pm8 + (isScanPM ? 1 : 0)
-            alignedCrt8 := alignedCrt8 + (aligned8 ? 1 : 0)
-    if ready9
-        scans9 := scans9 + 1
-        if valid9
-            crt9 := crt9 + 1
-            am9 := am9 + (isScanAM ? 1 : 0)
-            pm9 := pm9 + (isScanPM ? 1 : 0)
-            alignedCrt9 := alignedCrt9 + (aligned9 ? 1 : 0)
-    if ready10
-        scans10 := scans10 + 1
-        if valid10
-            crt10 := crt10 + 1
-            am10 := am10 + (isScanAM ? 1 : 0)
-            pm10 := pm10 + (isScanPM ? 1 : 0)
-            alignedCrt10 := alignedCrt10 + (aligned10 ? 1 : 0)
-
-// Live scanner table
+// Live scanner table only.
 var table scanner = table.new(position.top_right, 8, 12, border_width = 1)
 if barstate.islast and showTable
     table.cell(scanner, 0, 0, useAm ? "AM 09:00 NY" : "PM 21:00 NY")
@@ -414,48 +266,6 @@ if barstate.islast and showTable
     f_row(scanner, 10, "AUDUSD", bias9, sweep9, inside9, valid9, dir9, c2sweep9, aligned9)
     f_row(scanner, 11, "BTCUSD", bias10, sweep10, inside10, valid10, dir10, c2sweep10, aligned10)
 
-// CRT frequency ranking table: rank primarily by valid CRT count.
-var table ranking = table.new(position.bottom_right, 8, 12, border_width = 1)
-if barstate.islast and showRankingTable
-    array<string> labels = array.from("XAUUSD", "NAS100", "US500", "US30", "EURUSD", "GBPUSD", "USDJPY", "USDCAD", "AUDUSD", "BTCUSD")
-    array<int> scans = array.from(scans1, scans2, scans3, scans4, scans5, scans6, scans7, scans8, scans9, scans10)
-    array<int> counts = array.from(crt1, crt2, crt3, crt4, crt5, crt6, crt7, crt8, crt9, crt10)
-    array<int> amCounts = array.from(am1, am2, am3, am4, am5, am6, am7, am8, am9, am10)
-    array<int> pmCounts = array.from(pm1, pm2, pm3, pm4, pm5, pm6, pm7, pm8, pm9, pm10)
-    array<int> alignedCounts = array.from(alignedCrt1, alignedCrt2, alignedCrt3, alignedCrt4, alignedCrt5, alignedCrt6, alignedCrt7, alignedCrt8, alignedCrt9, alignedCrt10)
-    array<int> sortedIdx = array.sort_indices(counts, order.descending)
-
-    table.cell(ranking, 0, 0, "CRT RANK")
-    table.cell(ranking, 1, 0, testSessions)
-    table.cell(ranking, 2, 0, "")
-    table.cell(ranking, 3, 0, "")
-    table.cell(ranking, 4, 0, "")
-    table.cell(ranking, 5, 0, "")
-    table.cell(ranking, 6, 0, "")
-    table.cell(ranking, 7, 0, "")
-    table.cell(ranking, 0, 1, "Rank")
-    table.cell(ranking, 1, 1, "Symbol")
-    table.cell(ranking, 2, 1, "Eligible")
-    table.cell(ranking, 3, 1, "Valid")
-    table.cell(ranking, 4, 1, "Valid %")
-    table.cell(ranking, 5, 1, "AM")
-    table.cell(ranking, 6, 1, "PM")
-    table.cell(ranking, 7, 1, "Aligned")
-
-    for r = 0 to 9
-        int idx = array.get(sortedIdx, r)
-        int eligible = array.get(scans, idx)
-        int validTotal = array.get(counts, idx)
-        string rateText = eligible > 0 ? str.tostring(validTotal * 100.0 / eligible, "#.0") + "%" : "-"
-        table.cell(ranking, 0, r + 2, str.tostring(r + 1))
-        table.cell(ranking, 1, r + 2, array.get(labels, idx))
-        table.cell(ranking, 2, r + 2, str.tostring(eligible))
-        table.cell(ranking, 3, r + 2, str.tostring(validTotal))
-        table.cell(ranking, 4, r + 2, rateText)
-        table.cell(ranking, 5, r + 2, str.tostring(array.get(amCounts, idx)))
-        table.cell(ranking, 6, r + 2, str.tostring(array.get(pmCounts, idx)))
-        table.cell(ranking, 7, r + 2, str.tostring(array.get(alignedCounts, idx)))
-
 // Historical visual test marker. TradingView alerts themselves only fire in realtime.
 if showTestMarkers and (isScanAM or isScanPM)
     string validNames = f_valid_name(valid1, "XAU") + f_valid_name(valid2, "NAS") + f_valid_name(valid3, "SPX") + f_valid_name(valid4, "US30") + f_valid_name(valid5, "EU") + f_valid_name(valid6, "GU") + f_valid_name(valid7, "UJ") + f_valid_name(valid8, "UC") + f_valid_name(valid9, "AU") + f_valid_name(valid10, "BTC")
@@ -467,13 +277,13 @@ if showTestMarkers and (isScanAM or isScanPM)
 if barstate.islast and not tfOk
     label.new(bar_index, high, "CRT Scanner V1: use a 15-minute host chart for 09:00 / 21:00 NY alerts.", style = label.style_label_down)
 
-// Consolidated TradingView webhook payload
+// Consolidated TradingView webhook payload.
 if isScanAM or isScanPM
     string scanType = isScanAM ? "AM" : "PM"
     string timeNy = str.format_time(time_close, "yyyy-MM-dd HH:mm", TZ)
     string payload = "{"
     payload := payload + "\"secret\":\"" + webhookSecret + "\","
-    payload := payload + "\"version\":\"1.0.6\","
+    payload := payload + "\"version\":\"1.0.7\","
     payload := payload + "\"scan_type\":\"" + scanType + "\","
     payload := payload + "\"time_ny\":\"" + timeNy + " NY\","
     payload := payload + "\"symbols\":["
