@@ -25,6 +25,22 @@ def period_specs(start_year: int, end_day: date) -> list[tuple[str, date, date]]
     return specs
 
 
+def _truthy_series(series: pd.Series) -> pd.Series:
+    if pd.api.types.is_bool_dtype(series):
+        return series.fillna(False)
+    return series.astype(str).str.strip().str.lower().isin({"true", "1", "yes", "y"})
+
+
+def _m5_c3_coverage(trades: pd.DataFrame, min_c3_bars: int) -> tuple[int, int, float]:
+    if trades.empty or "c3_bars" not in trades.columns:
+        return 0, 0, 0.0
+    c3 = pd.to_numeric(trades["c3_bars"], errors="coerce").fillna(0)
+    total = int(len(c3))
+    covered = int((c3 >= min_c3_bars).sum())
+    ratio = covered / total if total else 0.0
+    return covered, total, ratio
+
+
 def run_period(
     label: str,
     start_day: date,
@@ -104,9 +120,33 @@ def run_period(
     sessions = pd.read_csv(session_path)
     portfolio = pd.read_csv(portfolio_path)
 
-    if ranking.empty or int(ranking.get("Trades", pd.Series(dtype=int)).sum()) == 0:
-        print(f"WARNING: {label} produced zero clean trades and will be excluded from robustness aggregation.")
+    covered, total_setups, coverage_ratio = _m5_c3_coverage(trades, args.c3_min_bars)
+    clean_trades = int(pd.to_numeric(ranking.get("Trades", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not ranking.empty else 0
+
+    if total_setups > 0:
+        print(
+            f"M5 C3 COVERAGE {label}: {covered}/{total_setups} valid CRT setups "
+            f"({coverage_ratio * 100.0:.1f}%) have >= {args.c3_min_bars} M5 bars."
+        )
+
+    # Do not confuse a genuine zero-trade strategy period with missing lower-timeframe data.
+    # A low C3 coverage ratio means the model could not actually evaluate most valid CRTs.
+    if total_setups > 0 and coverage_ratio < 0.50:
+        print(
+            f"WARNING: {label} skipped because only {coverage_ratio * 100.0:.1f}% of valid CRT setups "
+            f"had enough M5 C3 data. This is a history-coverage failure, not a strategy result."
+        )
         return None
+
+    if ranking.empty:
+        print(f"WARNING: {label} produced no ranking rows and will be excluded.")
+        return None
+
+    if clean_trades == 0:
+        print(
+            f"NOTE: {label} has adequate M5 coverage but produced zero clean trades. "
+            "It will remain in the robustness dataset as a genuine zero-trade period."
+        )
 
     for df in (ranking, trades, sessions, portfolio):
         df.insert(0, "Period", label)
@@ -117,10 +157,11 @@ def run_period(
 
 
 def cohort_stats(trades: pd.DataFrame, period: str, symbols: list[str]) -> dict:
+    entry_mask = _truthy_series(trades["retest_entry"]) if "retest_entry" in trades.columns else pd.Series(False, index=trades.index)
     part = trades[
         (trades["Period"] == period)
         & (trades["logical_symbol"].isin(symbols))
-        & (trades["retest_entry"].astype(bool))
+        & entry_mask
     ].copy()
 
     ambiguous = int((part["final_outcome"] == "AMBIGUOUS").sum()) if not part.empty else 0
@@ -209,7 +250,7 @@ def main() -> int:
     if args.sl_buffer_pips <= 0:
         parser.error("--sl-buffer-pips must be positive")
 
-    script_path = Path(__file__).with_name("mt5_crt_m5_performance_test.py")
+    script_path = Path(__file__).with_name("mt5_crt_m5_performance_chunked_test.py")
     if not script_path.exists():
         print(f"ERROR: Could not find {script_path}")
         return 2
@@ -217,7 +258,7 @@ def main() -> int:
     out_dir = Path(args.output)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    print("CRT Scanner V1 - Multi-period robustness test")
+    print("CRT Scanner V1 - Multi-period robustness test (chunked MT5 history)")
     print(f"Calendar start: {args.start_year} | Final date: {args.end}")
     print(f"Frozen rules: min-bars={args.min_bars}, C3-min-bars={args.c3_min_bars}, SL buffer={args.sl_buffer_pips:g} pips")
     print("No strategy parameters are changed between periods.")
@@ -252,7 +293,6 @@ def main() -> int:
 
     if not ranking_frames:
         print("\nERROR: No period had enough M5 history to produce a valid robustness result.")
-        print("Run mt5_m5_history_preflight.py after increasing MT5 Max bars in chart.")
         return 1
 
     ranking_all = pd.concat(ranking_frames, ignore_index=True)
@@ -339,7 +379,7 @@ def main() -> int:
     print(f"  {trades_csv}")
     print(f"  {skipped_csv}")
     print(f"  Excel: {excel_msg}")
-    print("\nNOTE: Skipped periods are not treated as zero-performance periods; they are excluded because the terminal did not expose enough M5 history.")
+    print("\nNOTE: Skipped periods are excluded only when lower-timeframe M5 coverage is inadequate; genuine zero-trade periods remain in the test.")
     return 0
 
 
