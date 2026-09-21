@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -32,7 +32,7 @@ def run_period(
     args: argparse.Namespace,
     script_path: Path,
     period_dir: Path,
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame] | None:
     period_dir.mkdir(parents=True, exist_ok=True)
 
     cmd = [
@@ -54,11 +54,11 @@ def run_period(
     print("-" * 88)
 
     proc = subprocess.run(cmd, capture_output=True, text=True)
+    combined_output = (proc.stdout or "") + ("\nSTDERR:\n" + proc.stderr if proc.stderr else "")
     log_path = period_dir / "console_output.txt"
-    log_path.write_text((proc.stdout or "") + ("\nSTDERR:\n" + proc.stderr if proc.stderr else ""), encoding="utf-8")
+    log_path.write_text(combined_output, encoding="utf-8")
 
     if proc.stdout:
-        # Keep console manageable while still surfacing the most useful lines.
         for line in proc.stdout.splitlines():
             if (
                 line.startswith(tuple(SYMBOL_ALIASES.keys()))
@@ -70,7 +70,18 @@ def run_period(
             ):
                 print(line)
 
+    no_m5_count = combined_output.count("no M5 history")
+    history_unavailable = no_m5_count >= max(1, len(SYMBOL_ALIASES) // 2)
+
     if proc.returncode != 0:
+        if history_unavailable:
+            print(
+                f"WARNING: {label} skipped because MT5 does not currently expose enough M5 history "
+                f"({no_m5_count}/{len(SYMBOL_ALIASES)} symbols reported no M5 history)."
+            )
+            print(f"         See {log_path}")
+            return None
+
         raise RuntimeError(
             f"Frozen performance test failed for {label} with exit code {proc.returncode}. "
             f"See {log_path}"
@@ -83,12 +94,19 @@ def run_period(
 
     missing = [p for p in [ranking_path, trades_path, session_path, portfolio_path] if not p.exists()]
     if missing:
+        if history_unavailable:
+            print(f"WARNING: {label} skipped because history outputs are incomplete.")
+            return None
         raise RuntimeError(f"Missing expected output(s) for {label}: {', '.join(str(p) for p in missing)}")
 
     ranking = pd.read_csv(ranking_path)
     trades = pd.read_csv(trades_path)
     sessions = pd.read_csv(session_path)
     portfolio = pd.read_csv(portfolio_path)
+
+    if ranking.empty or int(ranking.get("Trades", pd.Series(dtype=int)).sum()) == 0:
+        print(f"WARNING: {label} produced zero clean trades and will be excluded from robustness aggregation.")
+        return None
 
     for df in (ranking, trades, sessions, portfolio):
         df.insert(0, "Period", label)
@@ -208,18 +226,34 @@ def main() -> int:
     trade_frames: list[pd.DataFrame] = []
     session_frames: list[pd.DataFrame] = []
     portfolio_frames: list[pd.DataFrame] = []
+    completed_labels: list[str] = []
+    skipped_rows: list[dict] = []
 
     specs = period_specs(args.start_year, args.end)
 
     for label, start_day, end_day in specs:
         period_dir = out_dir / label
-        ranking, trades, sessions, portfolio = run_period(
-            label, start_day, end_day, args, script_path, period_dir
-        )
+        result = run_period(label, start_day, end_day, args, script_path, period_dir)
+        if result is None:
+            skipped_rows.append({
+                "Period": label,
+                "Period Start": start_day.isoformat(),
+                "Period End": end_day.isoformat(),
+                "Status": "SKIPPED_HISTORY_UNAVAILABLE",
+            })
+            continue
+
+        ranking, trades, sessions, portfolio = result
         ranking_frames.append(ranking)
         trade_frames.append(trades)
         session_frames.append(sessions)
         portfolio_frames.append(portfolio)
+        completed_labels.append(label)
+
+    if not ranking_frames:
+        print("\nERROR: No period had enough M5 history to produce a valid robustness result.")
+        print("Run mt5_m5_history_preflight.py after increasing MT5 Max bars in chart.")
+        return 1
 
     ranking_all = pd.concat(ranking_frames, ignore_index=True)
     trades_all = pd.concat(trade_frames, ignore_index=True)
@@ -229,7 +263,7 @@ def main() -> int:
     consistency = build_consistency(ranking_all)
     primary_periods = pd.DataFrame([
         cohort_stats(trades_all, label, PRIMARY_COHORT)
-        for label, _, _ in specs
+        for label in completed_labels
     ])
 
     primary_symbol_periods = ranking_all[ranking_all["Symbol"].isin(PRIMARY_COHORT)].copy()
@@ -260,12 +294,18 @@ def main() -> int:
     ]
     print(consistency[consistency_cols].to_string(index=False))
 
+    if skipped_rows:
+        print("\nSKIPPED PERIODS - MT5 HISTORY UNAVAILABLE")
+        print("=" * 88)
+        print(pd.DataFrame(skipped_rows).to_string(index=False))
+
     ranking_csv = out_dir / "robustness_symbol_periods.csv"
     sessions_csv = out_dir / "robustness_session_periods.csv"
     portfolio_csv = out_dir / "robustness_portfolio_periods.csv"
     consistency_csv = out_dir / "robustness_consistency.csv"
     primary_csv = out_dir / "robustness_primary_cohort.csv"
     trades_csv = out_dir / "robustness_all_trades.csv"
+    skipped_csv = out_dir / "robustness_skipped_periods.csv"
 
     ranking_all.to_csv(ranking_csv, index=False)
     sessions_all.to_csv(sessions_csv, index=False)
@@ -273,6 +313,7 @@ def main() -> int:
     consistency.to_csv(consistency_csv, index=False)
     primary_periods.to_csv(primary_csv, index=False)
     trades_all.to_csv(trades_csv, index=False)
+    pd.DataFrame(skipped_rows).to_csv(skipped_csv, index=False)
 
     xlsx_path = out_dir / "crt_m5_robustness_results.xlsx"
     try:
@@ -284,6 +325,7 @@ def main() -> int:
             sessions_all.to_excel(writer, sheet_name="AM PM Periods", index=False)
             portfolios_all.to_excel(writer, sheet_name="10 Symbol Portfolio", index=False)
             trades_all.to_excel(writer, sheet_name="All Trades", index=False)
+            pd.DataFrame(skipped_rows).to_excel(writer, sheet_name="Skipped Periods", index=False)
         excel_msg = str(xlsx_path)
     except (ImportError, ModuleNotFoundError):
         excel_msg = "not written (install openpyxl)"
@@ -295,8 +337,9 @@ def main() -> int:
     print(f"  {consistency_csv}")
     print(f"  {primary_csv}")
     print(f"  {trades_csv}")
+    print(f"  {skipped_csv}")
     print(f"  Excel: {excel_msg}")
-    print("\nNOTE: A positive 2026 result is not treated as validation by itself. The consistency table shows whether the same frozen rules persist across independent periods.")
+    print("\nNOTE: Skipped periods are not treated as zero-performance periods; they are excluded because the terminal did not expose enough M5 history.")
     return 0
 
 
