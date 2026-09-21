@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, MetaData, String, Table, Text, create_engine, delete, desc, select, update
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, MetaData, String, Table, Text, and_, create_engine, delete, desc, select, update
 from sqlalchemy.engine import Engine
 
 from v2_policy import classify_model_eligibility
@@ -165,6 +165,35 @@ def recent_shadow_setups(limit: int = 100) -> list[dict[str, Any]]:
     limit = max(1, min(int(limit), 1000))
     with engine.connect() as conn:
         rows = conn.execute(select(shadow_setups).order_by(desc(shadow_setups.c.id)).limit(limit)).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def pending_shadow_setups(limit: int = 100) -> list[dict[str, Any]]:
+    """Return pending primary-cohort setups with the CRT levels needed by the local MT5 shadow runner."""
+    init_db()
+    limit = max(1, min(int(limit), 500))
+    stmt = (
+        select(
+            *shadow_setups.c,
+            scan_symbols.c.sweep,
+            scan_symbols.c.c1_high,
+            scan_symbols.c.c1_low,
+            scan_symbols.c.c1_mid,
+            scan_symbols.c.c2_close,
+        )
+        .join(
+            scan_symbols,
+            and_(
+                scan_symbols.c.scan_id == shadow_setups.c.scan_id,
+                scan_symbols.c.label == shadow_setups.c.label,
+            ),
+        )
+        .where(shadow_setups.c.outcome == "PENDING")
+        .order_by(shadow_setups.c.id)
+        .limit(limit)
+    )
+    with engine.connect() as conn:
+        rows = conn.execute(stmt).mappings().all()
     return [dict(r) for r in rows]
 
 
