@@ -16,6 +16,15 @@ import pandas as pd
 from mt5_crt_frequency_test import NY, UTC, SYMBOL_ALIASES, parse_date, resolve_symbols, utc_bounds
 
 
+def month_chunks(start_day: date, end_day: date):
+    """Yield inclusive calendar chunks of at most 31 days."""
+    cursor = start_day
+    while cursor <= end_day:
+        chunk_end = min(cursor + timedelta(days=30), end_day)
+        yield cursor, chunk_end
+        cursor = chunk_end + timedelta(days=1)
+
+
 def probe_m5(symbol: str, start_day: date, end_day: date) -> dict:
     if not mt5.symbol_select(symbol, True):
         return {
@@ -23,27 +32,59 @@ def probe_m5(symbol: str, start_day: date, end_day: date) -> dict:
             "first_ny": None,
             "last_ny": None,
             "status": "SELECT_FAIL",
+            "chunks_ok": 0,
+            "chunks_empty": 0,
+            "first_available_chunk": None,
+            "last_available_chunk": None,
             "last_error": str(mt5.last_error()),
         }
 
-    start_utc, end_utc = utc_bounds(start_day, end_day)
-
-    # A tiny current-bar request helps MT5 initialise/synchronise the series
-    # before the historical range request on some terminals.
+    # Prime/synchronise the M5 series using the most recent bar.
     mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M5, 0, 1)
-    rates = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_M5, start_utc, end_utc)
 
-    if rates is None or len(rates) == 0:
+    frames: list[pd.DataFrame] = []
+    chunks_ok = 0
+    chunks_empty = 0
+    first_available_chunk = None
+    last_available_chunk = None
+    errors: list[str] = []
+
+    for chunk_start, chunk_end in month_chunks(start_day, end_day):
+        start_utc, end_utc = utc_bounds(chunk_start, chunk_end)
+        rates = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_M5, start_utc, end_utc)
+
+        if rates is None or len(rates) == 0:
+            chunks_empty += 1
+            err = mt5.last_error()
+            if err and str(err) not in {"(1, 'Success')", "(1, \"Success\")"}:
+                errors.append(f"{chunk_start}->{chunk_end}: {err}")
+            continue
+
+        chunks_ok += 1
+        label = f"{chunk_start}->{chunk_end}"
+        if first_available_chunk is None:
+            first_available_chunk = label
+        last_available_chunk = label
+        frames.append(pd.DataFrame(rates))
+
+    if not frames:
         return {
             "bars": 0,
             "first_ny": None,
             "last_ny": None,
             "status": "NO_M5",
-            "last_error": str(mt5.last_error()),
+            "chunks_ok": chunks_ok,
+            "chunks_empty": chunks_empty,
+            "first_available_chunk": None,
+            "last_available_chunk": None,
+            "last_error": " | ".join(errors[-3:]),
         }
 
-    first_utc = datetime.fromtimestamp(int(rates[0]["time"]), tz=UTC)
-    last_utc = datetime.fromtimestamp(int(rates[-1]["time"]), tz=UTC)
+    df = pd.concat(frames, ignore_index=True)
+    df = df.drop_duplicates(subset=["time"]).sort_values("time").reset_index(drop=True)
+
+    first_utc = datetime.fromtimestamp(int(df.iloc[0]["time"]), tz=UTC)
+    last_utc = datetime.fromtimestamp(int(df.iloc[-1]["time"]), tz=UTC)
     first_ny = first_utc.astimezone(NY)
     last_ny = last_utc.astimezone(NY)
 
@@ -61,11 +102,15 @@ def probe_m5(symbol: str, start_day: date, end_day: date) -> dict:
         status = "PARTIAL_BOTH"
 
     return {
-        "bars": int(len(rates)),
+        "bars": int(len(df)),
         "first_ny": first_ny.isoformat(timespec="minutes"),
         "last_ny": last_ny.isoformat(timespec="minutes"),
         "status": status,
-        "last_error": "",
+        "chunks_ok": chunks_ok,
+        "chunks_empty": chunks_empty,
+        "first_available_chunk": first_available_chunk,
+        "last_available_chunk": last_available_chunk,
+        "last_error": " | ".join(errors[-3:]),
     }
 
 
@@ -88,12 +133,12 @@ def main() -> int:
     try:
         mapping, missing, resolver_diag = resolve_symbols(args.start, args.end, args.max_candidates)
 
-        print("MT5 M5 HISTORY PREFLIGHT")
+        print("MT5 M5 HISTORY PREFLIGHT - CHUNKED")
         print(f"Requested: {args.start} -> {args.end}")
-        print("Resolver uses M15 coverage; this check validates M5 coverage separately.")
-        print("=" * 104)
-        print(f"{'Logical':<10} {'MT5 Symbol':<18} {'M5 bars':>10} {'First M5 NY':<23} {'Last M5 NY':<23} Status")
-        print("-" * 104)
+        print("Resolver uses M15 coverage; M5 is probed in <=31-day chunks to avoid large-range false negatives.")
+        print("=" * 132)
+        print(f"{'Logical':<10} {'MT5 Symbol':<18} {'M5 bars':>10} {'First M5 NY':<23} {'Last M5 NY':<23} {'OK':>4} {'Empty':>5} Status")
+        print("-" * 132)
 
         rows = []
         for logical in SYMBOL_ALIASES:
@@ -106,6 +151,10 @@ def main() -> int:
                     "first_ny": None,
                     "last_ny": None,
                     "status": "NO_M15_MAPPING",
+                    "chunks_ok": 0,
+                    "chunks_empty": 0,
+                    "first_available_chunk": None,
+                    "last_available_chunk": None,
                     "last_error": "",
                 }
             else:
@@ -115,7 +164,8 @@ def main() -> int:
 
             print(
                 f"{logical:<10} {row['mt5_symbol']:<18} {row['bars']:>10,} "
-                f"{str(row['first_ny'] or '-'): <23} {str(row['last_ny'] or '-'): <23} {row['status']}"
+                f"{str(row['first_ny'] or '-'): <23} {str(row['last_ny'] or '-'): <23} "
+                f"{row['chunks_ok']:>4} {row['chunks_empty']:>5} {row['status']}"
             )
 
         df = pd.DataFrame(rows)
@@ -131,12 +181,17 @@ def main() -> int:
         print(f"  NO M5 coverage:   {none}/10")
         print("  Saved: mt5_m5_history_preflight.csv")
 
+        print("\nINTERPRETATION")
+        print("  FULL          = M5 reaches both requested boundaries (allowing weekends/holidays).")
+        print("  PARTIAL_START = recent M5 exists, but the requested starting history is unavailable.")
+        print("  NO_M5         = even the smaller chunk requests returned no M5 bars.")
+        print("  The CSV includes first_available_chunk / last_available_chunk for diagnosis.")
+
         if full < len(SYMBOL_ALIASES):
-            print("\nACTION REQUIRED BEFORE A FULL ROBUSTNESS TEST:")
-            print("  In MT5: Tools -> Options -> Charts -> Max bars in chart")
-            print("  Set it to a very high value (for example 1,000,000, or Unlimited if offered).")
-            print("  Restart MT5, keep the XM account logged in, then rerun this preflight.")
-            print("  The Python API can only access bars that the terminal/broker makes available.")
+            print("\nNEXT STEP:")
+            print("  Do NOT treat missing years as zero-performance years.")
+            print("  If PARTIAL_START appears, we will start the robustness test from the earliest common M5 date.")
+            print("  If NO_M5 still appears despite your 2026 test working, rerun a 2026-only preflight to isolate terminal synchronisation.")
             return 1
 
         print("\nM5 coverage passed for all 10 symbols.")
