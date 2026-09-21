@@ -3,10 +3,10 @@ from __future__ import annotations
 import hmac
 import os
 
-from fastapi import FastAPI, HTTPException, Request, status
+from fastapi import FastAPI, Header, HTTPException, Request, status
 
 from schemas import ShadowOutcomePayload, TradingViewPayload
-from storage import init_db, save_scan, update_shadow_outcome
+from storage import init_db, pending_shadow_setups, save_scan, update_shadow_outcome
 
 app = FastAPI(title="CRT Scanner V2 Webhook", version="2.0.0")
 
@@ -40,6 +40,16 @@ async def tradingview_webhook(request: Request) -> dict[str, int | str]:
     require_secret(payload.secret)
     scan_id = save_scan(payload.model_dump())
     return {"status": "accepted", "scan_id": scan_id}
+
+
+@app.get("/shadow/pending")
+def get_pending_shadow_setups(
+    limit: int = 100,
+    x_shadow_secret: str = Header(default="", alias="X-Shadow-Secret"),
+) -> dict[str, object]:
+    require_secret(x_shadow_secret)
+    rows = pending_shadow_setups(limit)
+    return {"status": "ok", "count": len(rows), "setups": rows}
 
 
 @app.post("/shadow/{setup_id}/outcome")
