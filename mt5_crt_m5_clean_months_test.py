@@ -26,6 +26,28 @@ def month_bounds(month_text: str) -> tuple[date, date]:
     return date(year, month, 1), date(year, month, last_day)
 
 
+def load_month_outputs(month_text: str, month_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame] | None:
+    trades_path = month_dir / "crt_m5_performance_trades.csv"
+    ranking_path = month_dir / "crt_m5_performance_ranking.csv"
+    if not trades_path.exists() or not ranking_path.exists():
+        return None
+
+    trades = pd.read_csv(trades_path)
+    ranking = pd.read_csv(ranking_path)
+
+    if "Clean Month" not in trades.columns:
+        trades.insert(0, "Clean Month", month_text)
+    else:
+        trades["Clean Month"] = month_text
+
+    if "Clean Month" not in ranking.columns:
+        ranking.insert(0, "Clean Month", month_text)
+    else:
+        ranking["Clean Month"] = month_text
+
+    return trades, ranking
+
+
 def run_month(
     month_text: str,
     args: argparse.Namespace,
@@ -34,6 +56,12 @@ def run_month(
 ) -> tuple[pd.DataFrame, pd.DataFrame] | None:
     start_day, end_day = month_bounds(month_text)
     month_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.reuse_existing:
+        existing = load_month_outputs(month_text, month_dir)
+        if existing is not None:
+            print(f"\nREUSING CLEAN MONTH {month_text}: existing completed outputs")
+            return existing
 
     cmd = [
         sys.executable,
@@ -65,17 +93,11 @@ def run_month(
         print(f"WARNING: {month_text} failed with exit code {proc.returncode}. See {log_path}")
         return None
 
-    trades_path = month_dir / "crt_m5_performance_trades.csv"
-    ranking_path = month_dir / "crt_m5_performance_ranking.csv"
-    if not trades_path.exists() or not ranking_path.exists():
+    result = load_month_outputs(month_text, month_dir)
+    if result is None:
         print(f"WARNING: {month_text} missing expected output files. See {month_dir}")
         return None
-
-    trades = pd.read_csv(trades_path)
-    ranking = pd.read_csv(ranking_path)
-    trades.insert(0, "Clean Month", month_text)
-    ranking.insert(0, "Clean Month", month_text)
-    return trades, ranking
+    return result
 
 
 def entry_mask(df: pd.DataFrame) -> pd.Series:
@@ -99,8 +121,7 @@ def symbol_summary(trades: pd.DataFrame) -> pd.DataFrame:
     rows = []
     for symbol in PRIMARY_COHORT:
         part = trades[trades["logical_symbol"] == symbol].copy()
-        row = stats_row(symbol, part)
-        rows.append(row)
+        rows.append(stats_row(symbol, part))
     return pd.DataFrame(rows)
 
 
@@ -111,8 +132,8 @@ def monthly_cohort_summary(trades: pd.DataFrame, months: list[str]) -> pd.DataFr
             (trades["Clean Month"] == month)
             & (trades["logical_symbol"].isin(PRIMARY_COHORT))
         ].copy()
-        row = stats_row("US30+US500+XAUUSD", part)
-        row.insert(0, "Month", month)
+        stats = stats_row("US30+US500+XAUUSD", part)
+        row = {"Month": month, **stats}
         rows.append(row)
     return pd.DataFrame(rows)
 
@@ -133,6 +154,11 @@ def main() -> int:
     parser.add_argument("--output", default="results/crt_m5_clean_months")
     parser.add_argument("--terminal", default=None)
     parser.add_argument("--max-candidates", type=int, default=12)
+    parser.add_argument(
+        "--reuse-existing",
+        action="store_true",
+        help="Reuse existing per-month CSV outputs instead of rerunning MT5 when they already exist.",
+    )
     args = parser.parse_args()
 
     if not 1 <= args.min_bars <= 16:
@@ -174,6 +200,8 @@ def main() -> int:
     print("Frozen strategy rules are unchanged.")
     print("Included months are read directly from the coverage audit.")
     print("Clean months:", ", ".join(months))
+    if args.reuse_existing:
+        print("Reuse mode: existing completed month outputs will be loaded when available.")
 
     trade_frames: list[pd.DataFrame] = []
     ranking_frames: list[pd.DataFrame] = []
@@ -225,10 +253,12 @@ def main() -> int:
     print("\nMONTHLY CONSISTENCY")
     print("=" * 88)
     print(f"Completed clean months: {tested_months}/{len(months)}")
-    print(f"Positive-expectancy months: {positive_months}/{tested_months} ({positive_months / tested_months * 100.0:.1f}%)")
     if tested_months:
+        print(f"Positive-expectancy months: {positive_months}/{tested_months} ({positive_months / tested_months * 100.0:.1f}%)")
         print(f"Worst monthly expectancy: {monthly_summary['Expectancy R'].min():.3f}R")
         print(f"Best monthly expectancy:  {monthly_summary['Expectancy R'].max():.3f}R")
+    else:
+        print("Positive-expectancy months: 0/0")
 
     monthly_csv = out_dir / "clean_month_primary_cohort_monthly.csv"
     symbol_csv = out_dir / "clean_month_primary_symbols.csv"
